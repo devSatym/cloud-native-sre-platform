@@ -1,4 +1,10 @@
-# Observability
+> **Historical local-lab record — superseded.** The content below refers to
+> v0.1.0 metric names, dashboard inventories, and fixed namespaces. Use the root
+> [Observability section](../README.md#observability),
+> [`sre/slo-and-error-budget.md`](sre/slo-and-error-budget.md), and the current
+> Helm templates for the GKE design. It is not current validation evidence.
+
+# Observability (historical v0.1.0)
 
 _Last updated: 2026-06-25_
 

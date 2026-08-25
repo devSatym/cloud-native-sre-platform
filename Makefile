@@ -1,228 +1,157 @@
-HELP_WIDTH ?= 26
-NO_COLOR   ?= 0
-SEP_CHAR   ?= =
+SHELL := /usr/bin/env bash
+.DEFAULT_GOAL := help
 
-# ANSI (wyłączalne)
-ifeq ($(NO_COLOR),0)
-  CYAN := \033[36m
-  DIM  := \033[2m
-  RST  := \033[0m
-else
-  CYAN :=
-  DIM  :=
-  RST  :=
-endif
+VENV ?= venv
+NAMESPACE ?= sre-platform
+HELM_RELEASE_NAME ?= cloud-native-sre-platform
+MONITORING_NAMESPACE ?= monitoring
+PROMETHEUS_RELEASE ?= kube-prometheus-stack
+LOKI_RELEASE ?= loki
+VALUES_FILE ?= deploy/helm/values.yaml
+K6_BASE_URL ?= http://localhost:8080/api
+MONITORING_ENABLED ?= false
 
-# --- AWK program as a Make variable (no quoting hell) ---
-define AWK_HELP
-BEGIN { FS=":.*?## " }
-{
-  tgt=$$1; desc=$$2; grp="";
-  if (desc ~ /^\[/) {
-    g=desc; sub(/^\[/,"",g); sub(/\].*$$/,"",g); grp=g;
-    sub(/^\[[^]]+\][[:space:]]*/,"",desc);
-  }
-  key=(grp==""?"_misc":grp);
-  bucket[key]=bucket[key] tgt "\037" desc "\n";
-}
-END {
-  print SEP;
-  n=asorti(bucket, ks);
-  for (i=1; i<=n; i++) {
-    k=ks[i];
-    if (k!="_misc") printf(" %s%s%s\n", DIM, k, RST);
-    m=split(bucket[k], rows, "\n");
-    for (j=1; j<=m; j++) {
-      if (rows[j]=="") continue;
-      split(rows[j], p, "\037");
-      printf("  %s%-*s%s %s\n", CYAN, W, p[1], RST, p[2]);
-    }
-    print SEP;
-  }
-}
-endef
-export AWK_HELP
+.PHONY: help install clean-venv dev down ps logs logs-api logs-payments build \
+	test test-unit test-integration test-all lint helm-deps helm-lint helm-template \
+	helm-up-dev helm-test helm-down observability-up deploy terraform-plan validate \
+	load-test hpa-scale chaos-latency chaos-error chaos-slow chaos-kill chaos-cleanup \
+	evidence destroy clean
 
-# ============================================================================
-# Phony Targets
-# ============================================================================
+help: ## Show available developer, deployment, and evidence commands
+	@awk 'BEGIN { FS = ":.*## " } /^[a-zA-Z0-9_-]+:.*## / { printf "%-22s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 
-# Help targets
-.PHONY: help
+install: ## Create a virtual environment and install application/test dependencies
+	python3 -m venv $(VENV)
+	$(VENV)/bin/pip install --upgrade pip
+	$(VENV)/bin/pip install -r requirements-dev.txt
 
-# Setup targets
-.PHONY: install install-full clean-venv
+clean-venv: ## Remove only the project virtual environment
+	rm -rf $(VENV)
 
-# Development targets
-.PHONY: dev run down restart ps
+dev: ## Start the local Compose stack and wait for health checks
+	docker compose up -d --wait --wait-timeout 60
 
-# Build targets
-.PHONY: build
+down: ## Stop the local Compose stack
+	docker compose down
 
-# Helm targets
-.PHONY: helm-deps helm-lint helm-up-dev helm-test helm-down
+ps: ## Show local Compose service status
+	docker compose ps
 
-# Test targets
-.PHONY: test test-all test-unit test-integration test-docker lint
+logs: ## Stream all local Compose logs
+	docker compose logs -f
 
-# Operations targets
-.PHONY: logs logs-api logs-payments clean
+logs-api: ## Stream API logs
+	docker compose logs -f api
 
+logs-payments: ## Stream Payments logs
+	docker compose logs -f payments
 
+build: ## Build local development images
+	docker build -t cloud-native-sre-platform-api:dev -f services/api/Dockerfile .
+	docker build -t cloud-native-sre-platform-payments:dev -f services/payments/Dockerfile .
 
-# ============================================================================
-# Targets
-# ============================================================================ 
+test: test-unit ## Run unit tests without external services
 
-help: ## [Help] Show help for targets (grouped)
-	@C=$$(tput cols 2>/dev/null || echo 100); \
-	W=$(HELP_WIDTH); \
-	SEP=$$(printf '%*s' $$C | tr ' ' '$(SEP_CHAR)'); \
-	grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) \
-	| sort \
-	| awk -v C=$$C -v W=$$W -v CYAN='$(CYAN)' -v DIM='$(DIM)' -v RST='$(RST)' -v SEP="$$SEP" "$$AWK_HELP"
-
-install: ## [Setup] Install dev dependencies in venv (lightweight)
-	@if [ ! -d "venv" ]; then \
-		echo "Creating virtual environment..."; \
-		python -m venv venv; \
-	fi
-	@echo "Installing dev dependencies in venv..."
-	./venv/bin/pip install -r requirements-dev.txt
-	@echo ""
-	@echo "✅ Done! Activate venv with: source venv/bin/activate"
-	@echo "Or use: make test (will use venv automatically)"
-
-install-full: ## [Setup] Install ALL dependencies in venv (requires: postgresql-libs)
-	@if [ ! -d "venv" ]; then \
-		echo "Creating virtual environment..."; \
-		python -m venv venv; \
-	fi
-	@echo "Installing full dependencies in venv..."
-	./venv/bin/pip install -r requirements.txt
-	@echo ""
-	@echo "✅ Done!"
-
-dev: ## [DEV] Run local services
-	docker-compose up -d
-
-build: ## [Build] Build docker images
-	docker build -t api:dev -f services/api/Dockerfile .
-	docker build -t payments:dev -f services/payments/Dockerfile .
-
-test: ## [Test] Run unit tests (no services required)
-	@if [ -d "venv" ]; then \
-		./venv/bin/pytest -v -m "not integration"; \
-	elif command -v pytest >/dev/null 2>&1; then \
-		pytest -v -m "not integration"; \
+test-unit: ## Run unit tests without external services
+	@if [[ -x "$(VENV)/bin/pytest" ]]; then \
+		$(VENV)/bin/pytest -v -m "not integration"; \
 	else \
-		echo "❌ Error: pytest not found. Run: make install"; \
-		exit 1; \
+		echo "ERROR: run 'make install' first" >&2; exit 2; \
 	fi
 
-test-all: ## [Test] Run ALL tests including integration (requires: make dev)
-	@echo "⚠️  Integration tests require services. Checking if services are running..."
-	@if ! curl -s -f http://localhost:8000/healthz > /dev/null 2>&1 || \
-	    ! curl -s -f http://localhost:8001/healthz > /dev/null 2>&1; then \
-		echo "❌ Error: Services not running. Start with: make dev"; \
-		echo "   Then wait ~30s for services to be healthy before running tests."; \
-		exit 1; \
+test-integration: ## Run the API-to-Payments integration suite against Compose
+	@if ! curl --fail --silent http://localhost:8000/healthz >/dev/null || \
+		! curl --fail --silent http://localhost:8001/healthz >/dev/null; then \
+		echo "ERROR: start services with 'make dev' first" >&2; exit 2; \
 	fi
-	@echo "✅ Services are running. Running all tests..."
-	@if [ -d "venv" ]; then \
-		./venv/bin/pytest -v; \
-	elif command -v pytest >/dev/null 2>&1; then \
-		pytest -v; \
+	@if [[ -x "$(VENV)/bin/pytest" ]]; then \
+		$(VENV)/bin/pytest -v -m integration; \
 	else \
-		echo "❌ Error: pytest not found. Run: make install"; \
-		exit 1; \
+		echo "ERROR: run 'make install' first" >&2; exit 2; \
 	fi
 
-test-unit: ## [Test] Run unit tests only (same as 'make test')
-	@if [ -d "venv" ]; then \
-		./venv/bin/pytest -v -m "not integration"; \
-	elif command -v pytest >/dev/null 2>&1; then \
-		pytest -v -m "not integration"; \
+test-all: ## Run unit tests then Compose integration tests
+	$(MAKE) test-unit
+	$(MAKE) test-integration
+
+lint: ## Run Ruff over application and test code
+	@if [[ -x "$(VENV)/bin/ruff" ]]; then \
+		$(VENV)/bin/ruff check services/ tests/; \
 	else \
-		echo "❌ Error: pytest not found. Run: make install"; \
-		exit 1; \
+		echo "ERROR: run 'make install' first" >&2; exit 2; \
 	fi
 
-test-integration: ## [Test] Run integration tests only (requires: make dev)
-	@echo "⚠️  Integration tests require services. Checking if services are running..."
-	@if ! curl -s -f http://localhost:8000/healthz > /dev/null 2>&1 || \
-	    ! curl -s -f http://localhost:8001/healthz > /dev/null 2>&1; then \
-		echo "❌ Error: Services not running. Start with: make dev"; \
-		echo "   Then wait ~30s for services to be healthy before running tests."; \
-		exit 1; \
-	fi
-	@echo "✅ Services are running. Running integration tests..."
-	@if [ -d "venv" ]; then \
-		./venv/bin/pytest -v -m integration; \
-	elif command -v pytest >/dev/null 2>&1; then \
-		pytest -v -m integration; \
-	else \
-		echo "❌ Error: pytest not found. Run: make install"; \
-		exit 1; \
-	fi
+helm-deps: ## Build local Helm chart dependencies
+	helm dependency build deploy/helm
 
-test-docker: ## [Test] Run pytest in Docker container
-	docker run --rm -v $(PWD):/app -w /app python:3.11-slim sh -c "pip install -q -r requirements.txt && pytest -v"
+helm-lint: ## Lint the application Helm chart
+	helm lint deploy/helm
 
-lint: ## [Test] Run code linters (uses venv if available)
-	@if [ -d "venv" ]; then \
-		./venv/bin/ruff check services/; \
-	elif command -v ruff >/dev/null 2>&1; then \
-		ruff check services/; \
-	else \
-		echo "❌ Error: ruff not found. Run: make install"; \
-		exit 1; \
-	fi
+helm-template: ## Render the application chart with safe example image coordinates
+	helm template $(HELM_RELEASE_NAME) deploy/helm --namespace $(NAMESPACE) \
+		--set api.image.repository=example.invalid/api \
+		--set api.image.tag=0123456789abcdef \
+		--set payments.image.repository=example.invalid/payments \
+		--set payments.image.tag=0123456789abcdef
 
-run: dev ## [DEV] Alias for 'dev' - start all services
+helm-up-dev: helm-deps ## Install local images with development values
+	helm upgrade --install $(HELM_RELEASE_NAME) deploy/helm \
+		--namespace $(NAMESPACE) --create-namespace --values deploy/helm/values-dev.yaml
 
-down: ## [DEV] Stop all services
-	docker-compose down 
+helm-test: ## Run the Helm API-flow test hook
+	helm test $(HELM_RELEASE_NAME) --namespace $(NAMESPACE)
 
-logs: ## [OPS] Show logs from all services
-	docker-compose logs -f
+helm-down: ## Uninstall the application Helm release
+	helm uninstall $(HELM_RELEASE_NAME) --namespace $(NAMESPACE)
 
-logs-api: ## [OPS] Show logs from API service only
-	docker-compose logs -f api
+observability-up: ## Install pinned Prometheus, Grafana, Loki, and Promtail charts
+	MONITORING_NAMESPACE="$(MONITORING_NAMESPACE)" \
+		PROMETHEUS_RELEASE="$(PROMETHEUS_RELEASE)" LOKI_RELEASE="$(LOKI_RELEASE)" \
+		./scripts/deploy-observability.sh
 
-logs-payments: ## [OPS] Show logs from Payments service only
-	docker-compose logs -f payments 
+deploy: ## Deploy immutable images; set API/PAYMENTS_IMAGE_REPOSITORY and *_TAG
+	NAMESPACE="$(NAMESPACE)" HELM_RELEASE_NAME="$(HELM_RELEASE_NAME)" \
+		VALUES_FILE="$(VALUES_FILE)" MONITORING_ENABLED="$(MONITORING_ENABLED)" \
+		MONITORING_NAMESPACE="$(MONITORING_NAMESPACE)" \
+		PROMETHEUS_RELEASE="$(PROMETHEUS_RELEASE)" ./scripts/deploy.sh
 
-clean: ## [OPS] Clean up Docker images, containers, volumes
-	docker-compose down -v --remove-orphans
-	docker system prune -f
+terraform-plan: ## Validate and plan Terraform after copying terraform.tfvars.example
+	./scripts/terraform-plan.sh
 
-clean-venv: ## [Setup] Remove virtual environment
-	rm -rf venv
-	@echo "✅ Virtual environment removed"
+validate: ## Run read-only live GKE application and observability checks
+	NAMESPACE="$(NAMESPACE)" HELM_RELEASE_NAME="$(HELM_RELEASE_NAME)" \
+		MONITORING_NAMESPACE="$(MONITORING_NAMESPACE)" \
+		PROMETHEUS_RELEASE="$(PROMETHEUS_RELEASE)" LOKI_RELEASE="$(LOKI_RELEASE)" \
+		./scripts/validate.sh
 
-ps: ## [DEV] Show status of all services
-	docker-compose ps 
+load-test: ## Run the baseline k6 test against K6_BASE_URL
+	K6_BASE_URL="$(K6_BASE_URL)" ./scripts/load-test.sh baseline
 
-restart: down dev ## [DEV] Restart all services
+hpa-scale: ## Run the HPA k6 load generator; capture before/during/after separately
+	K6_BASE_URL="$(K6_BASE_URL)" ./scripts/load-test.sh hpa-scale
 
-helm-deps: ## [Helm] Build Helm dependencies
-	helm dependency build deploy/helm/
+chaos-latency: ## Inject reversible Payments latency
+	NAMESPACE="$(NAMESPACE)" HELM_RELEASE_NAME="$(HELM_RELEASE_NAME)" ./scripts/fault-inject.sh latency
 
-helm-lint:  ## [Helm] Lint Helm chart
-	helm lint deploy/helm/
+chaos-error: ## Inject reversible Payments HTTP 500 failures
+	NAMESPACE="$(NAMESPACE)" HELM_RELEASE_NAME="$(HELM_RELEASE_NAME)" ./scripts/fault-inject.sh failure
 
-helm-up-dev: helm-deps  ## [Helm] Install Helm chart (dev environment)
-	helm upgrade --install resilience-lab deploy/helm/ \
-		--values deploy/helm/values-dev.yaml \
-		--namespace resilience-lab \
-		--create-namespace
+chaos-slow: ## Inject reversible Payments slow responses
+	NAMESPACE="$(NAMESPACE)" HELM_RELEASE_NAME="$(HELM_RELEASE_NAME)" ./scripts/fault-inject.sh slow
 
-helm-test:  ## [Helm] Run Helm tests
-	helm test resilience-lab --namespace resilience-lab
+chaos-kill: ## Delete one Payments pod to test recovery, not PDB eviction
+	NAMESPACE="$(NAMESPACE)" HELM_RELEASE_NAME="$(HELM_RELEASE_NAME)" ./scripts/fault-inject.sh kill
 
-helm-down:  ## [Helm] Uninstall Helm release
-	helm uninstall resilience-lab --namespace resilience-lab
+chaos-cleanup: ## Remove injected fault state and reconcile the workload
+	NAMESPACE="$(NAMESPACE)" HELM_RELEASE_NAME="$(HELM_RELEASE_NAME)" ./scripts/fault-inject.sh cleanup
 
-rollback-%:  ## [??] Rollback to specific revision (usage: make rollback-1)
-	helm rollback resilience-lab $* --namespace resilience-lab
+evidence: ## Capture non-sensitive live cluster, HPA, Envoy, and SLO evidence
+	NAMESPACE="$(NAMESPACE)" HELM_RELEASE_NAME="$(HELM_RELEASE_NAME)" \
+		MONITORING_NAMESPACE="$(MONITORING_NAMESPACE)" \
+		PROMETHEUS_RELEASE="$(PROMETHEUS_RELEASE)" ./scripts/evidence/capture-all.sh
+
+destroy: ## Destroy Terraform-managed dev infrastructure; require CONFIRM_DESTROY=yes
+	CONFIRM_DESTROY="$(CONFIRM_DESTROY)" ./scripts/destroy.sh
+
+clean: ## Stop local Compose containers and remove its project volumes
+	docker compose down -v --remove-orphans

@@ -1,4 +1,10 @@
-# Deployment
+> **Historical local-lab record — superseded.** This v0.1.0 document contains
+> fixed local namespaces, old registry references, and a retired Traefik path. It
+> is retained for history only; use the root [Deployment Guide](../README.md#deployment-guide),
+> [`terraform/README.md`](../terraform/README.md), and the Helm chart for current
+> GKE instructions. It is not current validation evidence.
+
+# Deployment (historical v0.1.0)
 
 **Resilience Lab — v0.1.0**
 

@@ -1,3 +1,9 @@
+> **Historical v0.1.0 reflection — not a current incident record.** It contains
+> old deployment assumptions and historical outcomes. Use the evidence-aware
+> [`postmortems/payment-degradation.md`](postmortems/payment-degradation.md)
+> template for the current controlled incident; do not present this document as
+> GKE validation.
+
 # Postmortem — Resilience Lab v0.1.0
 
 This project took longer than planned, shipped everything that was promised, and taught

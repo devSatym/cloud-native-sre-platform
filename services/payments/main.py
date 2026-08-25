@@ -1,17 +1,15 @@
-"""
-Payments Service - Main entrypoint
-Handles payment processing and persistence.
-"""
+"""Payments service for the deliberately small in-memory demonstration workload."""
 
+import asyncio
 import os
-import time
 import uuid
-from typing import Dict, Any
-from fastapi import FastAPI, HTTPException, status
-from pydantic import BaseModel, Field
-from prometheus_fastapi_instrumentator import Instrumentator
+from typing import Any
 
-app = FastAPI(title="Resilience Lab - Payments Service")
+from fastapi import FastAPI, HTTPException, status
+from prometheus_fastapi_instrumentator import Instrumentator
+from pydantic import BaseModel, Field
+
+app = FastAPI(title="Cloud-Native SRE Platform - Payments Service")
 
 Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 
@@ -19,8 +17,9 @@ Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 FAIL_MODE = os.getenv("FAIL_MODE", "0") == "1"
 SLOW_MODE = os.getenv("SLOW_MODE", "0") == "1"
 
-# In-memory storage for demo (will be replaced with PG in future iterations)
-payments_store: Dict[str, Dict[str, Any]] = {}
+# In-memory storage is intentional for this small reliability demonstration; no
+# PostgreSQL dependency is deployed or implied by the payment workflow.
+payments_store: dict[str, dict[str, Any]] = {}
 
 
 class PaymentProcessRequest(BaseModel):
@@ -37,22 +36,28 @@ class PaymentProcessResponse(BaseModel):
 
 
 @app.get("/healthz")
-async def health_check() -> Dict[str, str]:
-    """Health check endpoint for K8s probes."""
+async def health_check() -> dict[str, str]:
+    """Process liveness endpoint."""
     return {"status": "healthy", "service": "payments"}
+
+
+@app.get("/readyz")
+async def readiness_check() -> dict[str, str]:
+    """Payments has no external persistent dependency in this demo workload."""
+    return {"status": "ready", "service": "payments"}
 
 
 @app.post(
     "/process", response_model=PaymentProcessResponse, status_code=status.HTTP_201_CREATED
 )
-async def process_payment(payment: PaymentProcessRequest) -> Dict[str, Any]:
+async def process_payment(payment: PaymentProcessRequest) -> dict[str, Any]:
     """
     Process a payment request.
-    Currently stores in-memory, will be persisted to PostgreSQL in M1.
+    Records are intentionally in-memory for this small reliability demonstration.
     """
     # Fault injection: Simulate slow responses
     if SLOW_MODE:
-        time.sleep(2)  # 2s delay
+        await asyncio.sleep(2)
 
     # Fault injection: Simulate failures
     if FAIL_MODE:
@@ -80,7 +85,7 @@ async def process_payment(payment: PaymentProcessRequest) -> Dict[str, Any]:
 
 
 @app.get("/payments/{payment_id}")
-async def get_payment(payment_id: str) -> Dict[str, Any]:
+async def get_payment(payment_id: str) -> dict[str, Any]:
     """Retrieve a payment by ID."""
     if payment_id not in payments_store:
         raise HTTPException(status_code=404, detail="payment not found")
@@ -89,12 +94,12 @@ async def get_payment(payment_id: str) -> Dict[str, Any]:
 
 
 @app.get("/")
-async def root() -> Dict[str, Any]:
+async def root() -> dict[str, Any]:
     """Root endpoint."""
     return {
-        "service": "resilience-lab-payments",
+        "service": "cloud-native-sre-platform-payments",
         "version": "0.0.1",
-        "endpoints": ["/healthz", "/process", "/payments/{id}"],
+        "endpoints": ["/healthz", "/readyz", "/process", "/payments/{id}"],
     }
 
 

@@ -1,15 +1,32 @@
+# Values for prometheus-community/kube-prometheus-stack (pinned by
+# scripts/deploy-observability.sh). Secret values are intentionally omitted:
+# the chart creates its own credentials, which must not be committed.
 prometheus:
   prometheusSpec:
-    retention: 7d
+    retention: 30d
     storageSpec:
       volumeClaimTemplate:
         spec:
           accessModes: ["ReadWriteOnce"]
           resources:
             requests:
-              storage: 10Gi
+              storage: 20Gi
+
 grafana:
   enabled: true
-  adminPassword: changeme  # override via: helm install --set grafana.adminPassword=<your-password>
-  alertmanager:
-    enabled: true
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      searchNamespace: ALL
+  additionalDataSources:
+    - name: Loki
+      type: loki
+      access: proxy
+      editable: false
+      # deploy-observability.sh overrides this when a non-default Loki release
+      # or monitoring namespace is selected.
+      url: http://loki.monitoring.svc.cluster.local:3100
+
+alertmanager:
+  enabled: true

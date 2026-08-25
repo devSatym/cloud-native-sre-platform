@@ -1,0 +1,27 @@
+# Copy this file to values-dev.local.yaml for a local Kubernetes cluster.
+# It deliberately contains no project ID, registry credential, or image SHA.
+api:
+  image:
+    repository: cloud-native-sre-platform-api
+    tag: dev
+    pullPolicy: IfNotPresent
+  env:
+    - name: LOG_LEVEL
+      value: DEBUG
+
+payments:
+  image:
+    repository: cloud-native-sre-platform-payments
+    tag: dev
+    pullPolicy: IfNotPresent
+
+ingress:
+  enabled: false
+
+networkPolicy:
+  enabled: false
+
+monitoring:
+  enabled: false
+  prometheusRule:
+    enabled: false

@@ -207,6 +207,7 @@ kubeconfig*
 # === Docker / Compose (local override) ===
 docker-compose.override.yml
 docker-compose.local.yml
+.local/
 
 # === Backupy (local from scripts) ===
 backups/

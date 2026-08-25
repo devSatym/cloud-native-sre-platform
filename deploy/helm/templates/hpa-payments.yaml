@@ -1,42 +1,24 @@
+{{- if .Values.payments.hpa.enabled }}
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: resilience-lab-payments-hpa
-  namespace: resilience-lab
+  name: {{ .Release.Name }}-payments-hpa
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cloud-native-sre-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/name: payments
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: resilience-lab-payments
-  minReplicas: 1
-  maxReplicas: 3
+    name: {{ .Release.Name }}-payments
+  minReplicas: {{ .Values.payments.hpa.minReplicas }}
+  maxReplicas: {{ .Values.payments.hpa.maxReplicas }}
   metrics:
-  - type: Resource
-    resource:
-      name: cpu
-      target:
-        type: Utilization
-        averageUtilization: 70
-  - type: Resource
-    resource:
-      name: memory
-      target:
-        type: Utilization
-        averageUtilization: 80
-  behavior:
-    scaleDown:
-      stabilizationWindowSeconds: 300
-      policies:
-      - type: Percent
-        value: 50
-        periodSeconds: 15
-    scaleUp:
-      stabilizationWindowSeconds: 0
-      policies:
-      - type: Percent
-        value: 100
-        periodSeconds: 15
-      - type: Pods
-        value: 2
-        periodSeconds: 15
-      selectPolicy: Max
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.payments.hpa.targetCPUUtilizationPercentage }}
+{{- end }}

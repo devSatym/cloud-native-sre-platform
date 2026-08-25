@@ -1,19 +1,12 @@
+{{- if .Values.resourceQuota.enabled }}
 apiVersion: v1
 kind: ResourceQuota
 metadata:
-  name: resilience-lab-quota
-  namespace: resilience-lab
+  name: {{ .Release.Name }}-quota
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cloud-native-sre-platform.labels" . | nindent 4 }}
 spec:
   hard:
-    # CPU: 4 replicas each of api+payments (HPA headroom) + redis
-    requests.cpu: "1"
-    limits.cpu: "4"
-    # Memory: same headroom calculation
-    requests.memory: 1Gi
-    limits.memory: 4Gi
-    # Object count caps
-    pods: "20"
-    services: "10"
-    configmaps: "20"
-    secrets: "20"
-    persistentvolumeclaims: "5"
+    {{- toYaml .Values.resourceQuota.hard | nindent 4 }}
+{{- end }}

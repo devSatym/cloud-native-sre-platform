@@ -1,69 +1,33 @@
 # Operational Runbooks
 
-This directory contains operational runbooks created from real incidents
-observed during the development of the Resilience Lab project.
+Current GKE procedures are intentionally separated from historical local-lab notes.
+An existing document is not validation evidence: follow the current procedure,
+capture the real result, and update the relevant evidence ledger only after it has
+been exercised.
 
-## Available Runbooks
+## Current procedures
 
-| Runbook | Severity | Status | Description |
-|---------|----------|--------|-------------|
-| [TEMPLATE](./TEMPLATE.md) | - | Active | Template for new runbooks |
-| [Chaos test — pod kill / partial outage (Payments)](./chaos-pod-kill.md) | P2 | Active | kubectl delete pod via fault-inject.sh; ~15s recovery; HPA/PDB behavior documented |
-| [Rollback vs Recover](./rollback-vs-recover.md) | P1 | Active | Decision guide: when to wait for auto-recovery vs. manual rollback during partial outage |
-| [Chaos test — latency injection 300ms (Payments)](./chaos-latency-injection.md) | P2 | Active | tc netem delay 300ms via fault-inject.sh; two-stage security; PromQL evidence |
-| [Prometheus targets missing or firing after observability setup](./TROUBLESHOOTING_OBSERVABILITY_TARGETS.md) | P2 | Active | ServiceMonitor discovery, API /metrics 500, Envoy apply, HPA/Helm conflicts |
-| [Prometheus cannot scrape API /metrics](./TROUBLESHOOTING_PROMETHEUS_SCRAPE.md) | P2 | Active | Redis connectivity + NetworkPolicy ingress issue |
-| [Helm SSA field manager conflicts](./TROUBLESHOOTING_HELM_FIELD_CONFLICTS.md) | P2 | Active | kubectl set image / apply steals field ownership from Helm; fix: --force-conflicts |
-| [Minikube — ImagePullBackOff for local images](./TROUBLESHOOTING_MINIKUBE_IMAGES.md) | P2 | Active | Build images inside minikube via eval $(minikube docker-env) |
+| Runbook | Status | Purpose |
+| --- | --- | --- |
+| [High user-facing payment error rate](high-payment-error-rate.md) | Draft; validation pending | Diagnose and mitigate the canonical Payments incident. |
+| [PDB eviction test](pdb-eviction-test.md) | Draft; validation pending | Validate a PDB through the eviction API, not direct deletion. |
+| [Prometheus cannot scrape API metrics](TROUBLESHOOTING_PROMETHEUS_SCRAPE.md) | Current procedure; validation pending | Diagnose API endpoint, ServiceMonitor, Redis readiness, and scrape discovery. |
+| [Application observability targets unhealthy](TROUBLESHOOTING_OBSERVABILITY_TARGETS.md) | Current procedure; validation pending | Diagnose stack prerequisites, selector labels, policies, and Prometheus targets. |
+| [Runbook template](TEMPLATE.md) | Template | Start a new evidence-aware operating procedure. |
 
-## Scope
+## Historical local-lab records
 
-Runbooks in this directory cover:
-- **Observability failures** (Prometheus, metrics scraping)
-- **NetworkPolicy and service connectivity** issues
-- **Dependency failure scenarios** (Redis, PostgreSQL)
-- **Kubernetes rollout and image lifecycle** problems
+The remaining older runbooks document a previous Minikube/Traefik-based lab. They
+may contain fixed namespaces, old image references, direct pod-deletion examples,
+or historical observations. They are retained as historical context only and must
+not be used as current GKE instructions or presented as current validation:
 
-## Structure
+- `chaos-pod-kill.md`
+- `chaos-latency-injection.md`
+- `rollback-vs-recover.md`
+- `TROUBLESHOOTING_HELM_FIELD_CONFLICTS.md`
+- `TROUBLESHOOTING_MINIKUBE_IMAGES.md`
 
-Each runbook includes:
-- **Description** - what we're solving
-- **Impact/Blast Radius** - what's affected, user impact
-- **Symptoms** - how to recognize the problem
-- **Root Cause** - known underlying issue
-- **Resolution Steps** - step-by-step procedure
-- **Verification** - how to confirm it's fixed
-- **Rollback** - what to do if something goes wrong
-- **Prevention** - long-term solutions
-
-## How to Create a New Runbook
-
-1. Copy `TEMPLATE.md`
-2. Name the file using convention: `<category>-<problem-name>.md`
-   - Examples: `k8s-pod-crashloop.md`, `redis-connection-timeout.md`
-3. Fill in all sections
-4. Add entry to the table above
-5. Test the procedure before marking as Active
-
-## Categories
-
-- **k8s-*** - Kubernetes issues
-- **network-*** - Network, NetworkPolicy issues
-- **monitoring-*** - Prometheus, Grafana
-- **db-*** - Database issues
-- **redis-*** - Redis issues
-- **deploy-*** - Deployment issues
-
-## Severity Levels
-
-- **P0 (Critical)** - Production down, revenue impact
-- **P1 (High)** - Severe problem, partial degradation
-- **P2 (Medium)** - Non-critical, can wait
-- **P3 (Low)** - Maintenance, optimizations
-
-## Principles
-
-1. **Keep it simple** - procedures must be clear and executable under pressure
-2. **Test before commit** - every runbook should be tested
-3. **Update after incident** - update runbook after each incident
-4. **Version control** - maintain change history
+See the [evidence ledger](../evidence/README.md) for the required capture standard
+and the [implementation plan](../implementation-plan.md) for the current target
+architecture.

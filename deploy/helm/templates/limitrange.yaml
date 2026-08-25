@@ -1,20 +1,20 @@
+{{- if .Values.limitRange.enabled }}
 apiVersion: v1
 kind: LimitRange
 metadata:
-  name: resilience-lab-limits
-  namespace: resilience-lab
+  name: {{ .Release.Name }}-limits
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cloud-native-sre-platform.labels" . | nindent 4 }}
 spec:
   limits:
     - type: Container
       default:
-        cpu: 500m
-        memory: 512Mi
+        {{- toYaml .Values.limitRange.default | nindent 8 }}
       defaultRequest:
-        cpu: 100m
-        memory: 128Mi
+        {{- toYaml .Values.limitRange.defaultRequest | nindent 8 }}
       max:
-        cpu: "1"
-        memory: 1Gi
+        {{- toYaml .Values.limitRange.max | nindent 8 }}
       min:
-        cpu: 10m
-        memory: 16Mi
+        {{- toYaml .Values.limitRange.min | nindent 8 }}
+{{- end }}

@@ -4,6 +4,7 @@ metadata:
   name: {{ include "payments.fullname" . }}
   labels:
     {{- include "payments.labels" . | nindent 4 }}
+    app.kubernetes.io/part-of: cloud-native-sre-platform
 spec:
   replicas: {{ .Values.replicaCount }}
   selector:
@@ -13,50 +14,62 @@ spec:
     metadata:
       labels:
         {{- include "payments.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/part-of: cloud-native-sre-platform
     spec:
+      automountServiceAccountToken: false
       securityContext:
         {{- if and .Values.chaosMode.netAdmin .Values.chaosMode.runAsRoot }}
         runAsNonRoot: false
         runAsUser: 0
+        runAsGroup: 0
         {{- else }}
         runAsNonRoot: true
         runAsUser: 1000
+        runAsGroup: 1000
         {{- end }}
         fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       volumes:
-          - name: tmp
-            emptyDir: {}
+        - name: tmp
+          emptyDir: {}
       containers:
-      - name: payments
-        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-        imagePullPolicy: {{ .Values.image.pullPolicy }}
-        ports:
-        - name: http
-          containerPort: 8001
-          protocol: TCP
-        env:
-        {{- range .Values.env }}
-        - name: {{ .name }}
-          value: {{ .value | quote }}
-        {{- end }}
-        startupProbe:
-          {{- toYaml .Values.startupProbe | nindent 10 }}
-        livenessProbe:
-          {{- toYaml .Values.livenessProbe | nindent 10 }}
-        readinessProbe:
-          {{- toYaml .Values.readinessProbe | nindent 10 }}
-        resources:
-          {{- toYaml .Values.resources | nindent 12 }}
-        securityContext:
-          readOnlyRootFilesystem: true
-          allowPrivilegeEscalation: false
-          capabilities:
-            drop:
-              - ALL
+        - name: payments
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8001
+              protocol: TCP
+          {{- with .Values.env }}
+          env:
+          {{- range . }}
+            - name: {{ .name }}
+              value: {{ .value | quote }}
+          {{- end }}
+          {{- end }}
+          startupProbe:
+            {{- toYaml .Values.startupProbe | nindent 12 }}
+          livenessProbe:
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
             {{- if .Values.chaosMode.netAdmin }}
-            add:
-              - NET_ADMIN
+              add:
+                - NET_ADMIN
             {{- end }}
-        volumeMounts:
-          - name: tmp
-            mountPath: /tmp
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp

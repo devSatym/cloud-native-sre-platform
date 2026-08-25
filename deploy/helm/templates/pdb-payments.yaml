@@ -1,11 +1,16 @@
+{{- if .Values.payments.pdb.enabled }}
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: resilience-lab-payments-pdb
-  namespace: resilience-lab
+  name: {{ .Release.Name }}-payments-pdb
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cloud-native-sre-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/name: payments
 spec:
-  minAvailable: 1
+  minAvailable: {{ .Values.payments.pdb.minAvailable }}
   selector:
     matchLabels:
-      app.kubernetes.io/instance: resilience-lab
+      app.kubernetes.io/instance: {{ .Release.Name }}
       app.kubernetes.io/name: payments
+{{- end }}

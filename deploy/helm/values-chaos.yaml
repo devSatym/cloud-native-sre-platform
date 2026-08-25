@@ -9,9 +9,10 @@
 #   payments.chaosMode.runAsRoot: true
 #   Re-run helm upgrade and retry.
 #
-# Cleanup (restores secure baseline):
-#   helm upgrade resilience-lab deploy/helm -n resilience-lab -f deploy/helm/values-dev.yaml
+# Cleanup restores the normal security baseline:
+#   helm upgrade --install cloud-native-sre-platform deploy/helm \
+#     --namespace sre-platform --values deploy/helm/values.yaml
 payments:
   chaosMode:
     netAdmin: true
-    runAsRoot: true  # Stage 2: tc fails with uid 1000 + NET_ADMIN alone (confirmed on this cluster)
+    runAsRoot: false

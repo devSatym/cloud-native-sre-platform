@@ -1,0 +1,106 @@
+name: Terraform plan
+
+on:
+  pull_request:
+    paths:
+      - terraform/**
+      - .github/workflows/terraform-plan.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: terraform-plan-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
+  TF_VAR_region: ${{ vars.GCP_REGION }}
+  TF_VAR_zone: ${{ vars.GCP_ZONE }}
+  TF_VAR_github_repository: ${{ github.repository }}
+  TF_VAR_artifact_registry_repository: ${{ vars.ARTIFACT_REGISTRY_REPOSITORY }}
+  TF_VAR_cluster_name: ${{ vars.GKE_CLUSTER_NAME }}
+  GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+  GCP_TERRAFORM_SERVICE_ACCOUNT: ${{ vars.GCP_TERRAFORM_SERVICE_ACCOUNT }}
+
+jobs:
+  fmt:
+    name: Terraform format
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Check Terraform formatting
+        run: terraform fmt -check -recursive terraform
+
+  plan:
+    name: Terraform plan
+    needs: fmt
+    # Do not expose a GCP identity to code from an untrusted fork. Maintainers
+    # can still review its formatting result and run the plan after merging.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Verify required Terraform configuration
+        run: |
+          required=(
+            TF_VAR_project_id
+            TF_VAR_region
+            TF_VAR_zone
+            TF_VAR_artifact_registry_repository
+            TF_VAR_cluster_name
+            GCP_WORKLOAD_IDENTITY_PROVIDER
+            GCP_TERRAFORM_SERVICE_ACCOUNT
+          )
+          missing=()
+          for variable in "${required[@]}"; do
+            if [[ -z "${!variable:-}" ]]; then
+              missing+=("${variable}")
+            fi
+          done
+          if (( ${#missing[@]} )); then
+            printf 'Missing required GitHub Actions variables: %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+
+      - name: Authenticate to Google Cloud with GitHub OIDC
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_TERRAFORM_SERVICE_ACCOUNT }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Initialize Terraform
+        working-directory: terraform/environments/dev
+        run: terraform init -backend=false -input=false
+
+      - name: Validate Terraform configuration
+        working-directory: terraform/environments/dev
+        run: terraform validate
+
+      - name: Create a no-refresh Terraform plan
+        working-directory: terraform/environments/dev
+        run: terraform plan -input=false -lock=false -refresh=false -out=tfplan
+
+      - name: Show Terraform plan
+        working-directory: terraform/environments/dev
+        run: terraform show -no-color tfplan

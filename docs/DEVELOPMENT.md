@@ -1,4 +1,10 @@
-# 💻 Development Guide
+> **Historical local-lab record — superseded.** This guide describes the previous
+> Compose/Minikube stack and contains retired dependencies and fixed names. Use the
+> root [Deployment Guide](../README.md#deployment-guide), `make help`, and the
+> current chart values for supported instructions. It is not current validation
+> evidence.
+
+# 💻 Development Guide (historical v0.1.0)
 
 **Resilience Lab — Developer Documentation**
 

@@ -1,127 +1,122 @@
-> This runbook was created based on a real incident observed in the Resilience Lab environment.
+# Runbook: Prometheus cannot scrape API metrics
 
-# Runbook: Prometheus cannot scrape API /metrics
+**Status:** Current procedure — not yet validated against a live GKE cluster.
+**Severity:** P2 (observability degradation).
+**Scope:** The Helm-managed API `ServiceMonitor`, Redis-backed API readiness, and
+the Prometheus Operator target that should scrape `/metrics`.
 
-**Status:** Active
+## Safety and context
 
-**Owner:** DevOps Team
-
-**Last Updated:** 2026-01-08
-
-**Severity:** P2 (Observability degradation)
-
-## Description
-
-Prometheus cannot scrape endpoint `/metrics` from API in namespace `resilience-lab`
-
-## Impact / Blast Radius
-
-- Affected: Prometheus metrics for API
-- User-facing traffic impacted: NO
-- Alerting / dashboards: OUT OF DATE
-- Envoy metrics: OK
-
-## Symptoms
-
-- Prometheus `/targets` shows API as DOWN
-- Errors:
-  - `context deadline exceeded`
-  - `HTTP 404 Not Found`
-- API returns `500` on `/healthz`
-
-## Root Cause
-
-Middleware rate-limiting attempts to connect to Redis, but: 
-- Redis does not have an **Ingress NetworkPolicy** 
-- Connection timeout -> exception -> API responds with 500 
--`/metrics` cannot be returned
-
-## Pre-flight Checks
+Set the target explicitly before inspecting it. These defaults are conventions,
+not evidence that a matching cluster exists.
 
 ```bash
-kubectl -n resilience-lab get pods
-kubectl -n resilience-lab logs <api-pod>
-kubectl get netpol -n resilience-lab
+export NAMESPACE="${NAMESPACE:-sre-platform}"
+export RELEASE="${RELEASE:-cloud-native-sre-platform}"
+export MONITORING_NAMESPACE="${MONITORING_NAMESPACE:-monitoring}"
+export PROMETHEUS_RELEASE="${PROMETHEUS_RELEASE:-kube-prometheus-stack}"
+kubectl config current-context
+kubectl get namespace "$NAMESPACE" "$MONITORING_NAMESPACE"
 ```
 
-## Resolution Steps
+Do not restart, scale, or patch a workload until the evidence below identifies a
+specific cause. Save redacted results under [`../evidence/observability/`](../evidence/observability/)
+when performing a real investigation.
 
-### Step 1: Check if the API actually works
+## Diagnose
+
+### 1. Confirm the release and discovery objects exist
 
 ```bash
-kubectl exec -n resilience-lab <api-pod> -- python - << 'PY'
-import urllib.request
-urllib.request.urlopen("http://127.0.0.1:8000/metrics", timeout=2)
-PY
+kubectl -n "$NAMESPACE" get deploy,svc,endpointslice
+kubectl -n "$MONITORING_NAMESPACE" get servicemonitor "${RELEASE}-api" -o yaml
+kubectl -n "$MONITORING_NAMESPACE" get prometheusrule "${RELEASE}-sre-rules" -o yaml
+kubectl -n "$MONITORING_NAMESPACE" get prometheus
 ```
 
-Error -> Go to Step 2
+The app chart labels ServiceMonitors and PrometheusRules with
+`release=${PROMETHEUS_RELEASE}`. The default matches
+`scripts/deploy-observability.sh`; if a different Prometheus release was installed,
+the application chart must be deployed with the same `PROMETHEUS_RELEASE` value.
 
-### Step 2: Check Redis/middleware logs
+### 2. Confirm API readiness and endpoints
+
+The API liveness endpoint is intentionally independent of Redis. Readiness checks
+Redis because it is required for the fail-closed rate limiter, so a ready endpoint
+failure is a useful dependency signal.
 
 ```bash
-kubectl logs -n resilience-lab <api-pod> | grep redis
+kubectl -n "$NAMESPACE" get pods \
+  -l "app.kubernetes.io/name=api,app.kubernetes.io/instance=${RELEASE}" -o wide
+kubectl -n "$NAMESPACE" get endpointslice \
+  -l "kubernetes.io/service-name=${RELEASE}-api" -o yaml
+kubectl -n "$NAMESPACE" logs deploy/"${RELEASE}-api" --tail=100
+kubectl -n "$NAMESPACE" logs deploy/"${RELEASE}-redis" --tail=100
 ```
 
-If logs contain:
-
-`redis.exceptions.TimeoutError`
-
--> Likely Redis connectivity issue (NetworkPolicy / Service / DNS)
-
-### Step 3: Check NetworkPolicy
+If the API is not Ready, inspect DNS, the Redis Service/Endpoints, and the applied
+NetworkPolicies before changing the ServiceMonitor:
 
 ```bash
-kubectl describe netpol -n resilience-lab
+kubectl -n "$NAMESPACE" get svc "${RELEASE}-redis"
+kubectl -n "$NAMESPACE" describe networkpolicy "${RELEASE}-api-traffic"
+kubectl -n "$NAMESPACE" describe networkpolicy "${RELEASE}-redis-traffic"
 ```
 
-No Ingress to Redis -> add NetworkPolicy allow-api-to-redis
+### 3. Inspect the Prometheus target and metric contract
 
-### Step 4: Restart deployment
+Port-forward the actual Prometheus Service name if it differs from the default:
 
 ```bash
-kubectl rollout restart deployment -n resilience-lab resilience-lab-api
+kubectl -n "$MONITORING_NAMESPACE" port-forward \
+  "service/${PROMETHEUS_RELEASE}-prometheus" 9090:9090
 ```
 
-## Verification
+In another terminal, query the target and canonical user-facing metrics:
 
 ```bash
-kubectl get pods -n resilience-lab
-curl http://api.resilience-lab/metrics
+curl -fsS --get http://127.0.0.1:9090/api/v1/query \
+  --data-urlencode "query=up{namespace=\"${NAMESPACE}\",service=\"${RELEASE}-api\"}"
+
+curl -fsS --get http://127.0.0.1:9090/api/v1/query \
+  --data-urlencode "query=sre_api_user_requests_total{namespace=\"${NAMESPACE}\"}"
 ```
 
-**Success criteria:**
+An empty target result can mean no discovery, no ready endpoints, a selector-label
+mismatch, or network-policy connectivity. A target with value `0` is a scrape
+failure; inspect the target's last error in the Prometheus UI and correlate it with
+API/Redis logs.
 
-- [ ] API Ready 1/1
-- [ ] `/metrics` -> 200
-- [ ] Prometheus target -> UP
+## Corrective actions
 
-## Prevention / Long-term Fix
+1. Correct the smallest demonstrated cause in Helm values or application
+   configuration; do not patch a Helm-managed object imperatively.
+2. When observability is intentionally enabled, deploy the application with a
+   matching namespace and Prometheus release label:
 
-Long-term solution to prevent the problem in the future:
+   ```bash
+   MONITORING_ENABLED=true \
+   MONITORING_NAMESPACE="$MONITORING_NAMESPACE" \
+   PROMETHEUS_RELEASE="$PROMETHEUS_RELEASE" \
+   ./scripts/deploy.sh
+   ```
 
-- [ ] Middleware: fail-open when Redis unavailable
-- [ ] Bypass rate-limit for /metrics and /healthz
-- [ ] Alert: Redis connection timeout
-- [ ] Use specific image tags (not :dev/:latest) with imagePullPolicy=IfNotPresent
+   `deploy.sh` still requires immutable application image coordinates for a
+   non-development deployment.
+3. Wait for the rollout, then repeat the target and metric queries. Do not call the
+   issue resolved merely because the `ServiceMonitor` object exists.
 
-## Common Pitfalls / Gotchas
+## Expected validation evidence
 
-- Old pods in the namespace `default`
-- `IfNotPresent` -> Old image
-- Confusing ingress with egress in NetPol
+Capture the applied ServiceMonitor, selector labels, endpoint state, Prometheus
+target status, metric query, context, namespace, release, and revision. Mark this
+procedure validated only after a real target reports healthy and the result is saved
+under [`../evidence/observability/`](../evidence/observability/).
 
-## Additional Resources
+## Related current configuration
 
-- [Architecture Overview](../docs/ARCHITECTURE.md)
-- [Network Policies](../deploy/helm/templates/netpol-allow-essentials.yaml)
-- [Prometheus Rules](../deploy/prometheus/rules.yaml)
-- [Prometheus ServiceMonitor – API](../deploy/prometheus/servicemonitor-api.yaml)
-- [Observability Overview](../docs/observability.md)
-
-## Change History
-
-| Date       | Author    | Changes                                            |
-| ---------- | --------- | -------------------------------------------------- |
-| 2026-01-08 | Tomasz P. | Created runbook after Prometheus /metrics incident |
-| 2026-01-08 | Tomasz P. | Added Redis NetworkPolicy ingress verification     |
+- [ServiceMonitors](../../deploy/helm/templates/servicemonitors.yaml)
+- [Prometheus rules](../../deploy/helm/templates/prometheus-rules.yaml)
+- [NetworkPolicies](../../deploy/helm/templates/networkpolicies.yaml)
+- [SLO metric contract](../sre/slo-and-error-budget.md)
+- [Live validation script](../../scripts/validate.sh)

@@ -1,350 +1,121 @@
-> This runbook was created from a real v0.1.0 observability validation incident.
+# Runbook: Application observability targets are missing or unhealthy
 
-# Runbook: Prometheus targets missing or firing after observability setup
+**Status:** Current procedure — no live GKE target result is committed yet.
+**Severity:** P2 (observability degradation).
+**Scope:** API, Payments, and Envoy ServiceMonitors; the app PrometheusRule;
+Prometheus discovery; Grafana dashboard provisioning; and Loki availability.
 
-**Status:** Active
+## What this checks
 
-**Owner:** DevOps Team
+The current GKE path installs the application chart and the observability stack
+separately. The application release creates ServiceMonitors when
+`monitoring.enabled=true` and a PrometheusRule when
+`monitoring.prometheusRule.enabled=true`; the Prometheus Operator must already have
+its CRDs installed. Grafana dashboard ConfigMaps are labeled for the dashboard
+sidecar.
 
-**Last Updated:** 2026-06-03
+This is a diagnostic procedure, not proof that any target has previously worked.
 
-**Severity:** P2 (Observability degradation)
-
-## Description
-
-Prometheus alert rules are installed, but `resilience-lab` targets are missing, down, or firing alerts such as `APIDown` and `PrometheusTargetDown`.
-
-This runbook covers the full troubleshooting path:
-
-- ServiceMonitors exist but no `resilience-lab` targets appear in Prometheus.
-- API `/metrics` returns `500`.
-- API metrics target is discovered but remains `DOWN`.
-- Helm upgrade conflicts with HPA-managed replicas.
-- Minikube control-plane targets are down and create noise.
-
-## Impact / Blast Radius
-
-- Affected: Prometheus targets, alerts, dashboards, and observability validation.
-- User-facing traffic impacted: usually no.
-- Release impact: blocks observability issues such as basic alerting and scrape target verification.
-
-## Symptoms
-
-Prometheus `/targets` shows:
-
-- only `kube-system` and `monitoring` targets;
-- no targets with `namespace="resilience-lab"`;
-- `resilience-lab-api` target is present but `DOWN`;
-- kube-prometheus-stack control-plane targets are `DOWN`, such as:
-  - `kube-controller-manager`
-  - `kube-scheduler`
-  - `kube-etcd`
-
-Prometheus `/alerts` shows:
-
-- `APIDown` firing;
-- `PrometheusTargetDown` firing;
-- `HighErrorRate` is healthy or inactive.
-
-API logs may show:
-
-```text
-redis.exceptions.ConnectionError: Error -2 connecting to redis:6379. Name or service not known.
-```
-
-Helm upgrade may fail with:
-
-```text
-conflict with "kube-controller-manager" with subresource "scale" using apps/v1: .spec.replicas
-```
-
-## Root Causes Observed
-
-### 1. Application targets were not deployed
-
-ServiceMonitors were present in the `monitoring` namespace, but there were no Services or Endpoints in the `resilience-lab` namespace.
-
-Observed output:
-
-```text
-kubectl get svc -n resilience-lab
-No resources found in resilience-lab namespace.
-
-kubectl get endpoints -n resilience-lab
-No resources found in resilience-lab namespace.
-```
-
-### 2. Envoy is deployed outside the Helm chart
-
-API and Payments are deployed through Helm, but Envoy manifests live under `deploy/envoy/` and must be applied separately.
-
-If Envoy is not applied, the Envoy ServiceMonitor has no target.
-
-### 3. API `/metrics` depended on Redis through rate limiting middleware
-
-The API rate-limit middleware attempted Redis access before serving `/metrics`. If Redis DNS/service/connectivity failed, Prometheus received HTTP 500.
-
-The fix is to bypass rate limiting for operational endpoints:
-
-- `/healthz`
-- `/metrics`
-
-### 4. New code was built locally but not deployed into the running cluster
-
-Restarting a Deployment does not update code unless the pod image changes and the cluster can pull or access that image.
-
-In Minikube, either:
-
-- build into Minikube's Docker daemon; or
-- push to a registry and update the Deployment image tag.
-
-### 5. Helm upgrade conflicted with HPA-managed replicas
-
-When HPA manages the Deployment scale subresource, Helm/server-side apply can conflict on `.spec.replicas`.
-
-This blocks an image rollout through Helm even when the manifest is otherwise valid.
-
-### 6. Minikube control-plane target noise
-
-kube-prometheus-stack may discover Minikube control-plane targets that refuse connections:
-
-- `kube-controller-manager`
-- `kube-scheduler`
-- `kube-etcd`
-
-These are separate from Resilience Lab application monitoring. They can be cleaned up later, but they should not block validation of `resilience-lab` targets.
-
-## Diagnosis
-
-### Step 1: Check namespace labels
+## Establish context
 
 ```bash
-kubectl get ns --show-labels
+export NAMESPACE="${NAMESPACE:-sre-platform}"
+export RELEASE="${RELEASE:-cloud-native-sre-platform}"
+export MONITORING_NAMESPACE="${MONITORING_NAMESPACE:-monitoring}"
+export PROMETHEUS_RELEASE="${PROMETHEUS_RELEASE:-kube-prometheus-stack}"
+
+kubectl config current-context
+kubectl get namespace "$NAMESPACE" "$MONITORING_NAMESPACE"
+kubectl get crd servicemonitors.monitoring.coreos.com prometheusrules.monitoring.coreos.com
 ```
 
-Expected:
+## Diagnose in order
 
-- `monitoring` namespace exists.
-- `resilience-lab` namespace exists.
-
-### Step 2: Check ServiceMonitors
+### 1. Verify observability workloads
 
 ```bash
-kubectl get servicemonitor -A
+kubectl -n "$MONITORING_NAMESPACE" get pods
+kubectl -n "$MONITORING_NAMESPACE" get svc
+kubectl -n "$MONITORING_NAMESPACE" get prometheus
 ```
 
-Expected:
+Identify any non-Running Prometheus, Grafana, Loki, or Promtail pod before
+investigating the application. Read events and logs for the exact workload rather
+than assuming a chart name or selector.
 
-```text
-monitoring   resilience-lab-api-metrics
-monitoring   envoy-proxy-metrics
-```
-
-### Step 3: Check application Services and Endpoints
+### 2. Verify app discovery objects and selector labels
 
 ```bash
-kubectl get svc -n resilience-lab --show-labels
-kubectl get endpoints -n resilience-lab
-kubectl get pods -n resilience-lab -o wide
+kubectl -n "$MONITORING_NAMESPACE" get servicemonitor \
+  "${RELEASE}-api" "${RELEASE}-payments" "${RELEASE}-envoy" -o yaml
+kubectl -n "$MONITORING_NAMESPACE" get prometheusrule "${RELEASE}-sre-rules" -o yaml
+kubectl -n "$NAMESPACE" get configmap -l grafana_dashboard=1
 ```
 
-Expected:
+The `release` label on both ServiceMonitors and PrometheusRules must equal the
+Prometheus Helm release that owns the selector. The supplied defaults are
+`kube-prometheus-stack` in namespace `monitoring`. If the stack was installed with
+different values, reconcile the application through `scripts/deploy.sh` with
+matching `MONITORING_NAMESPACE` and `PROMETHEUS_RELEASE`; do not hand-edit the
+discovery objects.
 
-- API Service exists.
-- Envoy Service exists.
-- API and Envoy Endpoints exist.
-- API pods are `Running` and `Ready`.
-
-### Step 4: Check ServiceMonitor selectors
+### 3. Verify application endpoints and NetworkPolicy paths
 
 ```bash
-kubectl describe servicemonitor -n monitoring resilience-lab-api-metrics
-kubectl describe servicemonitor -n monitoring envoy-proxy-metrics
+for service in api payments envoy; do
+  kubectl -n "$NAMESPACE" get endpointslice \
+    -l "kubernetes.io/service-name=${RELEASE}-${service}" -o wide
+done
+
+kubectl -n "$NAMESPACE" get networkpolicy
+kubectl -n "$NAMESPACE" describe networkpolicy "${RELEASE}-api-traffic"
+kubectl -n "$NAMESPACE" describe networkpolicy "${RELEASE}-payments-traffic"
+kubectl -n "$NAMESPACE" describe networkpolicy "${RELEASE}-envoy-traffic"
 ```
 
-Expected selector matches:
+The app NetworkPolicies allow the selected monitoring namespace to scrape API and
+Payments on their HTTP ports and Envoy on its admin port. If a different monitoring
+namespace is used, the Helm values must update both the chart monitoring namespace
+and the NetworkPolicy monitoring namespace together.
 
-- API Service label: `app.kubernetes.io/name: api`
-- Envoy Service label: `app: envoy-proxy`
-
-### Step 5: Test `/metrics` from inside the cluster
-
-From the same namespace:
+### 4. Query Prometheus rather than relying on Kubernetes object existence
 
 ```bash
-kubectl run curl-test -n resilience-lab --rm -it \
-  --image=curlimages/curl --restart=Never -- \
-  curl -v http://resilience-lab-api:8000/metrics
+kubectl -n "$MONITORING_NAMESPACE" port-forward \
+  "service/${PROMETHEUS_RELEASE}-prometheus" 9090:9090
 ```
 
-From the monitoring namespace:
+Then use the Prometheus UI or API to inspect current app targets:
 
 ```bash
-kubectl run curl-test -n monitoring --rm -it \
-  --image=curlimages/curl --restart=Never -- \
-  curl -v http://resilience-lab-api.resilience-lab.svc.cluster.local:8000/metrics
+curl -fsS --get http://127.0.0.1:9090/api/v1/query \
+  --data-urlencode "query=up{namespace=\"${NAMESPACE}\"}"
+
+curl -fsS --get http://127.0.0.1:9090/api/v1/query \
+  --data-urlencode "query=sre_api_user_requests_total{namespace=\"${NAMESPACE}\"}"
 ```
 
-Expected:
+Record target labels, values, and scrape errors. Do not infer user-facing health
+from an `up` series alone; use the canonical `/pay` metrics and SLO queries for the
+caller path.
 
-```text
-HTTP/1.1 200 OK
-```
+## Corrective path and verification
 
-### Step 6: Check API logs
+1. Repair the evidenced prerequisite (CRD, selector label, endpoint/readiness,
+   namespace alignment, or NetworkPolicy) in version-controlled values/templates.
+2. Reconcile with Helm using immutable images. If observability is enabled, pass
+   the matching monitoring parameters to `scripts/deploy.sh`.
+3. Run [`scripts/validate.sh`](../../scripts/validate.sh) with the same namespace,
+   release, and monitoring variables. It returns non-zero if an expected target,
+   rule, dashboard pod, Loki check, endpoint, or rollout is missing.
+4. Save the real target output, rule result, and dashboard/Loki observation under
+   [`../evidence/observability/`](../evidence/observability/) with UTC context.
 
-```bash
-kubectl logs -n resilience-lab deployment/resilience-lab-api --tail=100
-```
+## Related current configuration
 
-If logs show Redis errors while scraping `/metrics`, verify that the running image contains the operational endpoint bypass.
-
-## Resolution
-
-### Case A: ServiceMonitors exist but no `resilience-lab` Services exist
-
-Deploy the Helm chart:
-
-```bash
-helm dependency build deploy/helm
-helm upgrade --install resilience-lab deploy/helm \
-  --values deploy/helm/values-dev.yaml \
-  --namespace resilience-lab \
-  --create-namespace
-```
-
-Apply Envoy separately:
-
-```bash
-kubectl apply -f deploy/envoy/envoy-config.yaml
-kubectl apply -f deploy/envoy/envoy-deployment.yaml
-kubectl apply -f deploy/envoy/envoy-service.yaml
-```
-
-Verify:
-
-```bash
-kubectl get svc -n resilience-lab --show-labels
-kubectl get endpoints -n resilience-lab
-```
-
-### Case B: API `/metrics` returns 500
-
-Ensure the API image includes the rate-limit bypass for:
-
-- `/healthz`
-- `/metrics`
-
-The code should bypass Redis before `_check_rate_limit()` for these paths.
-
-Build and deploy a new image. In Minikube:
-
-```bash
-eval $(minikube docker-env)
-
-docker build -t ghcr.io/lotoos0/resilience-lab-api:metrics-bypass \
-  -f services/api/Dockerfile .
-```
-
-If Helm upgrade conflicts with HPA, update the image directly:
-
-```bash
-kubectl -n resilience-lab set image deployment/resilience-lab-api \
-  api=ghcr.io/lotoos0/resilience-lab-api:metrics-bypass
-```
-
-Then verify rollout:
-
-```bash
-kubectl -n resilience-lab rollout status deployment/resilience-lab-api
-kubectl -n resilience-lab get pods -l app.kubernetes.io/name=api
-```
-
-### Case C: Helm upgrade fails on `.spec.replicas`
-
-Short-term workaround:
-
-```bash
-kubectl -n resilience-lab set image deployment/resilience-lab-api \
-  api=<new-image-tag>
-```
-
-Long-term fix:
-
-- adjust Helm/HPA ownership so Helm does not fight HPA over `.spec.replicas`;
-- or temporarily disable HPA during Helm upgrades;
-- or template `replicas` only when autoscaling is disabled.
-
-### Case D: kube-system control-plane targets are DOWN in Minikube
-
-This is common in local Minikube setups. It is separate from Resilience Lab target health.
-
-For local lab cleanup, consider disabling these kube-prometheus-stack monitors:
-
-```yaml
-kubeControllerManager:
-  enabled: false
-
-kubeScheduler:
-  enabled: false
-
-kubeEtcd:
-  enabled: false
-```
-
-Apply the values through the kube-prometheus-stack Helm release.
-
-## Verification
-
-In Prometheus, run:
-
-```promql
-up{namespace="resilience-lab"}
-```
-
-Expected:
-
-- API target is `1`.
-- Envoy target is `1`.
-
-Check alerts:
-
-```text
-http://localhost:9090/alerts
-```
-
-Expected:
-
-- `HighErrorRate` is green/inactive.
-- `APIDown` is green/inactive.
-- `PrometheusTargetDown` is green/inactive.
-
-## Prevention
-
-- Keep `ServiceMonitor` manifests applied with the observability stack.
-- Include Envoy deployment in the main release flow or document it as a separate required apply step.
-- Keep `/healthz` and `/metrics` independent from Redis and other optional dependencies.
-- Use explicit image tags during validation; avoid relying on stale `latest` or `IfNotPresent`.
-- Add a Helm/HPA compatibility fix before release.
-- Add this runbook to observability validation steps.
-
-## Related Issues
-
-- `#39` - Basic Prometheus alert rules
-- `#34` - Verify Prometheus scrape targets
-- `#29` - Expose rate-limit metrics and logs
-- `#38` - Deploy Loki + Promtail
-
-## Additional Resources
-
-- [Observability Overview](../observability.md)
-- [Prometheus scrape troubleshooting](./TROUBLESHOOTING_PROMETHEUS_SCRAPE.md)
-- [Prometheus Rules](../../deploy/prometheus/rules.yaml)
-- [API ServiceMonitor](../../deploy/prometheus/servicemonitor-api.yaml)
-- [Envoy ServiceMonitor](../../deploy/prometheus/servicemonitor-envoy.yaml)
-
-## Change History
-
-| Date       | Author     | Changes |
-|------------|------------|---------|
-| 2026-06-03 | DevOps Team | Created after v0.1.0 alert validation incident |
+- [Application ServiceMonitors](../../deploy/helm/templates/servicemonitors.yaml)
+- [SLO and alert rules](../../deploy/helm/templates/prometheus-rules.yaml)
+- [SRE dashboard](../../deploy/helm/dashboards/sre-service-overview.json)
+- [Prometheus values](../../deploy/prometheus/values.yaml)
+- [Loki values](../../deploy/loki/values.yaml)
+- [SLO design](../sre/slo-and-error-budget.md)

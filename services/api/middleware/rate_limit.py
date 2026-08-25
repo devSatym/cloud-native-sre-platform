@@ -10,13 +10,17 @@ from typing import Callable
 from fastapi import Request, status
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
-from redis import Redis
 from prometheus_client import Counter
+from redis import Redis
+from redis.exceptions import RedisError
 
 logger = logging.getLogger(__name__)
 # Metrics
-rl_allowed = Counter("rl_allowed_total", "Total allowed requests", ["tenant"])
-rl_denied = Counter("rl_denied_total", "Total denied requests", ["tenant"])
+rl_allowed = Counter("rl_allowed_total", "Total requests allowed by the rate limiter")
+rl_denied = Counter("rl_denied_total", "Total requests denied by the rate limiter")
+rl_backend_errors = Counter(
+    "rl_backend_errors_total", "Total Redis errors while enforcing the rate limiter"
+)
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -33,7 +37,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         max_requests: int = 60,
         window_seconds: int = 60,
         tenant_header: str = "X-Tenant",
-        excluded_paths: tuple[str, ...] = ("/healthz", "/metrics"),
+        excluded_paths: tuple[str, ...] = ("/healthz", "/readyz", "/metrics"),
     ):
         super().__init__(app)
         self.redis = redis_client
@@ -50,8 +54,22 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # Get tenant from header (default: 'default')
         tenant_id = request.headers.get(self.tenant_header, "default")
 
-        # Check rate limit
-        allowed, current_count = await self._check_rate_limit(tenant_id)
+        try:
+            allowed, current_count = await self._check_rate_limit(tenant_id)
+        except RedisError:
+            # Fail closed: accepting unbounded traffic during a limiter outage would
+            # defeat the bulkhead/rate-limit protection this service demonstrates.
+            rl_backend_errors.inc()
+            logger.warning(
+                "rate_limit_backend_unavailable tenant=%s path=%s", tenant_id, request.url.path
+            )
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content={
+                    "error": "rate_limit_backend_unavailable",
+                    "message": "Rate limiting is temporarily unavailable",
+                },
+            )
 
         # Log rate limit check in logfmt (key=value) so Loki can filter/parse
         # by tenant and request context, e.g. `{app="api"} | logfmt | tenant="acme"`
@@ -112,8 +130,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         # Check if under limit and track metrics
         if request_count < self.max_requests:
-            rl_allowed.labels(tenant=tenant_id).inc()
+            rl_allowed.inc()
             return True, request_count
         else:
-            rl_denied.labels(tenant=tenant_id).inc()
+            rl_denied.inc()
             return False, request_count

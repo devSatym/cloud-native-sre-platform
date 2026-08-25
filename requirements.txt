@@ -1,15 +1,16 @@
-# Core dependencies for Resilience Lab
-# Updated: 2026-06-19 (Security fixes: CVE-2026-48710, CVE-2026-25645, CVE-2024-47081, CVE-2024-35195, CVE-2025-71176, CVE-2026-48818, CVE-2026-54283)
+# Core dependencies for the Cloud-Native Reliability Engineering Platform.
+# Vulnerability status is evaluated by the CI Trivy gates; do not treat comments
+# here as security evidence.
 
 # Web framework
-starlette==1.3.1  # Security: CVE-2026-48818, CVE-2026-54283 fixed in 1.3.1 (supersedes 1.0.1 pin)
-fastapi  # Let pip resolve latest compatible with starlette 1.0.1
+starlette==1.3.1
+fastapi==0.141.1
 uvicorn[standard]==0.32.1
 pydantic==2.10.5
 pydantic-core==2.27.2
 
-# Database
-psycopg2-binary==2.9.9
+# Redis is used for the API tenant rate limiter. Payments intentionally uses
+# in-memory storage in this small demonstration workload.
 redis==5.0.1
 
 # HTTP client
@@ -18,7 +19,7 @@ requests==2.33.0
 
 # Monitoring
 prometheus-client==0.19.0
-prometheus-fastapi-instrumentator==8.*
+prometheus-fastapi-instrumentator==8.1.0
 
 # Testing
 pytest==9.0.3

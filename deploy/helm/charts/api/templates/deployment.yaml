@@ -4,6 +4,7 @@ metadata:
   name: {{ include "api.fullname" . }}
   labels:
     {{- include "api.labels" . | nindent 4 }}
+    app.kubernetes.io/part-of: cloud-native-sre-platform
 spec:
   replicas: {{ .Values.replicaCount }}
   selector:
@@ -13,11 +14,20 @@ spec:
     metadata:
       labels:
         {{- include "api.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/part-of: cloud-native-sre-platform
     spec:
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
+        runAsGroup: 1000
         fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       volumes:
         - name: tmp
           emptyDir: {}
@@ -30,6 +40,10 @@ spec:
               containerPort: 8000
               protocol: TCP
           env:
+            - name: PAYMENTS_URL
+              value: {{ default (printf "http://%s-envoy.%s.svc.cluster.local/payments" .Release.Name .Release.Namespace) .Values.paymentsUrl | quote }}
+            - name: REDIS_URL
+              value: {{ default (printf "redis://%s-redis.%s.svc.cluster.local:6379/0" .Release.Name .Release.Namespace) .Values.redisUrl | quote }}
           {{- range .Values.env }}
             - name: {{ .name }}
               value: {{ .value | quote }}

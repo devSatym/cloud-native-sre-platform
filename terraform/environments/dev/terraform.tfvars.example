@@ -1,0 +1,25 @@
+# Copy this file to terraform.tfvars and replace every placeholder before use.
+# terraform.tfvars is ignored intentionally; do not place credentials or JSON
+# service-account keys in it.
+
+project_id        = "your-gcp-project-id"
+region            = "asia-south1"
+zone              = "asia-south1-a"
+github_repository = "your-github-owner/your-repository"
+
+# These names are defaults shown explicitly so they can be changed without
+# modifying module source. The Docker repository holds both api and payments.
+network_name                 = "sre-dev-vpc"
+subnetwork_name              = "sre-dev-gke-subnet"
+cluster_name                 = "sre-dev-gke"
+artifact_registry_repository = "sre-images-dev"
+
+# Keep two nodes for PodDisruptionBudget experiments and cap this low-cost dev
+# pool at three nodes.
+node_machine_type = "e2-standard-2"
+min_node_count    = 2
+max_node_count    = 3
+
+labels = {
+  owner = "replace-me"
+}

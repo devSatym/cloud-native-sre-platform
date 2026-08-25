@@ -1,0 +1,98 @@
+name: Terraform apply
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type apply to confirm infrastructure changes to the configured development environment
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: terraform-apply-dev
+  cancel-in-progress: false
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
+  TF_VAR_region: ${{ vars.GCP_REGION }}
+  TF_VAR_zone: ${{ vars.GCP_ZONE }}
+  TF_VAR_github_repository: ${{ github.repository }}
+  TF_VAR_artifact_registry_repository: ${{ vars.ARTIFACT_REGISTRY_REPOSITORY }}
+  TF_VAR_cluster_name: ${{ vars.GKE_CLUSTER_NAME }}
+  GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+  GCP_TERRAFORM_SERVICE_ACCOUNT: ${{ vars.GCP_TERRAFORM_SERVICE_ACCOUNT }}
+
+jobs:
+  apply:
+    name: Guarded Terraform apply
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      inputs.confirmation == 'apply'
+    runs-on: ubuntu-latest
+    environment:
+      name: terraform-apply
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Verify required Terraform configuration
+        run: |
+          required=(
+            TF_VAR_project_id
+            TF_VAR_region
+            TF_VAR_zone
+            TF_VAR_artifact_registry_repository
+            TF_VAR_cluster_name
+            GCP_WORKLOAD_IDENTITY_PROVIDER
+            GCP_TERRAFORM_SERVICE_ACCOUNT
+          )
+          missing=()
+          for variable in "${required[@]}"; do
+            if [[ -z "${!variable:-}" ]]; then
+              missing+=("${variable}")
+            fi
+          done
+          if (( ${#missing[@]} )); then
+            printf 'Missing required GitHub Actions variables: %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+
+      - name: Authenticate to Google Cloud with GitHub OIDC
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_TERRAFORM_SERVICE_ACCOUNT }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Initialize Terraform
+        working-directory: terraform/environments/dev
+        run: |
+          test -f backend.tf || {
+            echo "A reviewed remote backend.tf is required for apply; do not create state on an ephemeral runner." >&2
+            exit 1
+          }
+          terraform init -input=false
+
+      - name: Validate Terraform configuration
+        working-directory: terraform/environments/dev
+        run: terraform validate
+
+      - name: Create reviewed apply plan
+        working-directory: terraform/environments/dev
+        run: terraform plan -input=false -lock-timeout=5m -out=tfplan
+
+      - name: Apply Terraform plan
+        working-directory: terraform/environments/dev
+        run: terraform apply -input=false -auto-approve tfplan

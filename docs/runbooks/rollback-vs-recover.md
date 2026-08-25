@@ -1,3 +1,7 @@
+> **Historical local-lab record — superseded.** Names and commands below target a
+> prior local release. Use the current Helm release variables and
+> [payment-error runbook](high-payment-error-rate.md) for GKE incidents.
+
 # Rollback vs Recover Runbook
 
 **Namespace:** `resilience-lab`

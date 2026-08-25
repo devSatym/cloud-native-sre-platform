@@ -40,8 +40,10 @@ Known root cause of the problem (if known).
 
 ```bash
 # Commands to confirm the problem exists
-kubectl get pods -n resilience-lab
-kubectl logs -n resilience-lab <pod-name>
+export NAMESPACE="${NAMESPACE:-sre-platform}"
+export RELEASE="${RELEASE:-cloud-native-sre-platform}"
+kubectl get pods -n "$NAMESPACE"
+kubectl logs -n "$NAMESPACE" <pod-name>
 ```
 
 ## Resolution Steps
@@ -78,8 +80,8 @@ kubectl describe pod <pod-name>
 ### Step 3: Restart service (if needed)
 
 ```bash
-kubectl rollout restart deployment -n resilience-lab <deployment-name>
-kubectl rollout status deployment -n resilience-lab <deployment-name>
+kubectl rollout restart deployment -n "$NAMESPACE" <deployment-name>
+kubectl rollout status deployment -n "$NAMESPACE" <deployment-name>
 ```
 
 ## Verification
@@ -88,10 +90,10 @@ How to verify the problem is resolved:
 
 ```bash
 # Check pod status
-kubectl get pods -n resilience-lab
+kubectl get pods -n "$NAMESPACE"
 
 # Check logs
-kubectl logs -n resilience-lab <pod-name> --tail=50
+kubectl logs -n "$NAMESPACE" <pod-name> --tail=50
 
 # Test endpoint
 curl http://<service-endpoint>/healthz
@@ -108,10 +110,10 @@ curl http://<service-endpoint>/healthz
 
 ```bash
 # Rollback to previous version
-kubectl rollout undo deployment -n resilience-lab <deployment-name>
+kubectl rollout undo deployment -n "$NAMESPACE" <deployment-name>
 
 # Or restore from backup
-helm rollback resilience-lab <revision>
+helm rollback "$RELEASE" <revision> --namespace "$NAMESPACE"
 ```
 
 ## Prevention / Long-term Fix

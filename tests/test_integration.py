@@ -1,13 +1,15 @@
-"""Integration tests for Resilience Lab services."""
+"""Integration tests for the Cloud-Native Reliability Engineering Platform."""
+
+import os
+import time
 
 import pytest
 import requests
-import time
 
 pytestmark = pytest.mark.integration
 
-API_BASE = "http://localhost:8000"
-PAYMENTS_BASE = "http://localhost:8001"
+API_BASE = os.getenv("API_BASE_URL", "http://localhost:8000")
+PAYMENTS_BASE = os.getenv("PAYMENTS_BASE_URL", "http://localhost:8001")
 
 
 def wait_for_service(url: str, timeout: int = 30):
@@ -40,7 +42,20 @@ class TestServiceHealth:
 
 
 class TestPaymentFlow:
-    """Test payment processing flow."""
+    """Test the API-to-Payments payment processing flow."""
+
+    def test_api_payment_endpoint(self):
+        payload = {"amount": 100, "currency": "USD", "tenant_id": "integration-test"}
+        response = requests.post(
+            f"{API_BASE}/pay",
+            json=payload,
+            headers={"X-Tenant": "integration-test"},
+            timeout=10,
+        )
+        assert response.status_code == 201
+        data = response.json()
+        assert data["status"] == "completed"
+        assert data["amount"] == 100
 
     def test_payment_endpoint(self):
         """Test /process endpoint accepts payment request."""

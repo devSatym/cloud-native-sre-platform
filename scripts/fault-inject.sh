@@ -1,120 +1,103 @@
 #!/usr/bin/env bash
-# Fault injection for resilience testing
+# Reversible fault injection for the Cloud-Native SRE Platform.
 
 set -euo pipefail
 
-NAMESPACE="${NAMESPACE:-resilience-lab}"
+NAMESPACE="${NAMESPACE:-sre-platform}"
+HELM_RELEASE_NAME="${HELM_RELEASE_NAME:-cloud-native-sre-platform}"
+PAYMENTS_DEPLOYMENT="${PAYMENTS_DEPLOYMENT:-${HELM_RELEASE_NAME}-payments}"
+PAYMENTS_SELECTOR="app.kubernetes.io/name=payments,app.kubernetes.io/instance=${HELM_RELEASE_NAME}"
+FAULT_DELAY="${FAULT_DELAY:-300ms}"
 MODE="${1:-help}"
 
 usage() {
-  cat << EOF
+  cat <<EOF
 Usage: $0 [MODE]
 
 Modes:
-  latency    - Inject 300ms latency to payments pod
-  failure    - Set FAIL_MODE=1 (payments returns 500)
-  slow       - Set SLOW_MODE=1 (payments delays 2s)
-  kill       - Delete random payments pod
-  cleanup    - Remove all fault injections
-  help       - Show this help
-
-Examples:
-  $0 latency
-  $0 failure
-  $0 cleanup
+  latency    Add a reversible tc netem delay to every Payments pod
+  failure    Set FAIL_MODE=1 so Payments returns HTTP 500
+  slow       Set SLOW_MODE=1 so Payments delays each request for two seconds
+  kill       Delete one Payments pod to demonstrate recovery (not a PDB test)
+  cleanup    Remove flags and tc qdiscs, then wait for the rollout
+  help       Show this help
 
 Environment variables:
-  NAMESPACE - K8s namespace (default: resilience-lab)
+  NAMESPACE            Kubernetes namespace (default: sre-platform)
+  HELM_RELEASE_NAME    Helm release name (default: cloud-native-sre-platform)
+  PAYMENTS_DEPLOYMENT  Override the derived Deployment name
+  FAULT_DELAY          netem delay (default: 300ms)
+
+Before latency injection, deploy the explicit chaos values file so Payments has
+the required NET_ADMIN capability. Always run cleanup or reconcile the Helm release
+after an experiment. This script never substitutes for the PDB eviction runbook.
 EOF
 }
 
-inject_latency() {
-  echo "🔥 Injecting 300ms latency to payments pods..."
-  PODS=$(kubectl get pods -n "$NAMESPACE" -l app.kubernetes.io/name=payments -o name)
+payments_pods() {
+  kubectl get pods -n "$NAMESPACE" -l "$PAYMENTS_SELECTOR" -o name
+}
 
-  if [ -z "$PODS" ]; then
-    echo "ERROR: No payments pods found in namespace $NAMESPACE" >&2
+require_payments_pods() {
+  local pods
+  pods="$(payments_pods)"
+  if [[ -z "$pods" ]]; then
+    echo "ERROR: no Payments pods match $PAYMENTS_SELECTOR in $NAMESPACE" >&2
     exit 1
   fi
+  printf '%s\n' "$pods"
+}
 
-  for POD in $PODS; do
-    echo "  → $POD"
-
-    if ! kubectl exec -n "$NAMESPACE" "$POD" -- which tc > /dev/null 2>&1; then
-      echo "ERROR: 'tc' not found in $POD." >&2
-      echo "  Fix: rebuild the payments image with iproute2 and redeploy." >&2
+inject_latency() {
+  echo "Injecting ${FAULT_DELAY} latency into Payments pods..."
+  local pod
+  while IFS= read -r pod; do
+    echo "  -> $pod"
+    if ! kubectl exec -n "$NAMESPACE" "$pod" -- which tc >/dev/null 2>&1; then
+      echo "ERROR: tc is unavailable in $pod. Rebuild the Payments image with iproute2." >&2
       exit 1
     fi
+    kubectl exec -n "$NAMESPACE" "$pod" -- \
+      tc qdisc replace dev eth0 root netem delay "$FAULT_DELAY"
+  done < <(require_payments_pods)
 
-    kubectl exec -n "$NAMESPACE" "$POD" -- \
-      tc qdisc add dev eth0 root netem delay 300ms
-  done
-
-  echo "✅ Latency injected. Verify with:"
-  echo "   kubectl exec -n $NAMESPACE <pod> -- tc qdisc show dev eth0"
+  echo "Latency injection applied. Capture Envoy counters and k6 output before cleanup."
 }
 
-inject_failure() {
-  echo "🔥 Setting FAIL_MODE=1 on payments deployment..."
-
-  kubectl set env deployment/resilience-lab-payments \
-    -n "$NAMESPACE" FAIL_MODE=1
-
-  echo "✅ FAIL_MODE enabled. Payments will return 500."
-  echo "   Monitor retries and outlier ejection in Envoy stats."
-}
-
-inject_slow() {
-  echo "🔥 Setting SLOW_MODE=1 on payments deployment..."
-
-  kubectl set env deployment/resilience-lab-payments \
-    -n "$NAMESPACE" SLOW_MODE=1
-
-  echo "✅ SLOW_MODE enabled. Payments will delay 2s."
-  echo "   Monitor timeouts in Envoy stats."
+set_fault_flag() {
+  local flag="$1"
+  echo "Setting ${flag}=1 on deployment/${PAYMENTS_DEPLOYMENT}..."
+  kubectl set env -n "$NAMESPACE" "deployment/${PAYMENTS_DEPLOYMENT}" "${flag}=1"
+  kubectl rollout status -n "$NAMESPACE" "deployment/${PAYMENTS_DEPLOYMENT}" --timeout=180s
+  echo "${flag} is enabled. This mutates a Helm-managed workload; run cleanup and reconcile Helm."
 }
 
 kill_pod() {
-  echo "🔥 Deleting random payments pod..."
+  local pod
+  pod="$(kubectl get pods -n "$NAMESPACE" -l "$PAYMENTS_SELECTOR" -o jsonpath='{.items[0].metadata.name}')"
+  if [[ -z "$pod" ]]; then
+    echo "ERROR: no Payments pod found in $NAMESPACE" >&2
+    exit 1
+  fi
 
-  POD=$(kubectl get pods -n "$NAMESPACE" \
-    -l app.kubernetes.io/name=payments \
-    -o jsonpath='{.items[0].metadata.name}')
-
-  echo "  → Killing $POD"
-  kubectl delete pod -n "$NAMESPACE" "$POD"
-
-  echo "✅ Pod deleted. Monitor retries and pod recovery."
+  echo "Deleting pod/${pod}. Direct deletion demonstrates recovery only; it bypasses PDB eviction."
+  kubectl delete pod -n "$NAMESPACE" "$pod"
 }
 
 cleanup() {
-  echo "🧹 Cleaning up fault injections..."
+  echo "Removing fault flags from deployment/${PAYMENTS_DEPLOYMENT}..."
+  kubectl set env -n "$NAMESPACE" "deployment/${PAYMENTS_DEPLOYMENT}" \
+    FAIL_MODE- SLOW_MODE- 2>/dev/null || true
 
-  # Remove env vars
-  kubectl set env deployment/resilience-lab-payments \
-    -n "$NAMESPACE" FAIL_MODE- SLOW_MODE- 2>/dev/null || true
-
-  # Remove tc latency
-  PODS=$(kubectl get pods -n "$NAMESPACE" \
-    -l app.kubernetes.io/name=payments -o name 2>/dev/null || true)
-
-  for POD in $PODS; do
-    echo "  → Cleaning $POD"
-    kubectl exec -n "$NAMESPACE" "$POD" -- \
+  local pod
+  while IFS= read -r pod; do
+    echo "  -> clearing tc state on $pod"
+    kubectl exec -n "$NAMESPACE" "$pod" -- \
       tc qdisc del dev eth0 root 2>/dev/null || true
+  done < <(payments_pods || true)
 
-    REMAINING=$(kubectl exec -n "$NAMESPACE" "$POD" -- \
-      tc qdisc show dev eth0 2>/dev/null \
-      | grep -v -E 'noqueue|pfifo_fast|noop' || true)
-    if [ -n "$REMAINING" ]; then
-      echo "  ⚠️  WARNING: non-default tc qdisc still present on $POD:"
-      echo "  $REMAINING"
-    else
-      echo "  ✅ tc qdisc clean on $POD"
-    fi
-  done
-
-  echo "✅ Cleanup complete."
+  kubectl rollout status -n "$NAMESPACE" "deployment/${PAYMENTS_DEPLOYMENT}" --timeout=180s
+  echo "Cleanup completed. Re-run Helm upgrade with the non-chaos values to remove any elevated capability."
 }
 
 case "$MODE" in
@@ -122,10 +105,10 @@ case "$MODE" in
     inject_latency
     ;;
   failure)
-    inject_failure
+    set_fault_flag FAIL_MODE
     ;;
   slow)
-    inject_slow
+    set_fault_flag SLOW_MODE
     ;;
   kill)
     kill_pod
@@ -133,9 +116,12 @@ case "$MODE" in
   cleanup)
     cleanup
     ;;
-  help|*)
+  help|--help|-h)
     usage
-    exit 0
+    ;;
+  *)
+    echo "ERROR: unsupported fault mode: $MODE" >&2
+    usage >&2
+    exit 2
     ;;
 esac
-

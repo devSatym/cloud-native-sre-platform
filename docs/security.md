@@ -1,4 +1,10 @@
-# Security
+> **Historical local-lab record — partially superseded.** Some general security
+> guidance remains useful, but any fixed namespace, repository, or deployment
+> example below is not the current GKE configuration. Use the root
+> [Security section](../README.md#security) and Terraform/Helm source of truth for
+> current controls. This document is not live-validation evidence.
+
+# Security (historical v0.1.0)
 
 *Last updated: 2026-06-26*
 

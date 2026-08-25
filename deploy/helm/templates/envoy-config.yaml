@@ -1,0 +1,168 @@
+{{- if .Values.envoy.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-envoy-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cloud-native-sre-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/name: envoy
+data:
+  envoy.yaml: |
+    admin:
+      address:
+        socket_address:
+          address: 0.0.0.0
+          port_value: {{ .Values.envoy.service.adminPort }}
+    static_resources:
+      listeners:
+        - name: ingress_http
+          address:
+            socket_address:
+              address: 0.0.0.0
+              port_value: 10000
+          filter_chains:
+            - filters:
+                - name: envoy.filters.network.http_connection_manager
+                  typed_config:
+                    "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                    stat_prefix: ingress_http
+                    codec_type: AUTO
+                    request_timeout: {{ .Values.envoy.timeouts.request }}
+                    stream_idle_timeout: 60s
+                    access_log:
+                      - name: envoy.access_loggers.stdout
+                        typed_config:
+                          "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+                    route_config:
+                      name: local_route
+                      virtual_hosts:
+                        - name: backend
+                          domains: ["*"]
+                          routes:
+                            - match:
+                                prefix: "/api"
+                              route:
+                                cluster: api_service
+                                timeout: {{ .Values.envoy.timeouts.request }}
+                                regex_rewrite:
+                                  pattern:
+                                    regex: "^/api"
+                                  substitution: ""
+                                retry_policy:
+                                  retry_on: "5xx,reset,connect-failure,refused-stream"
+                                  num_retries: {{ .Values.envoy.retry.attempts }}
+                                  per_try_timeout: {{ .Values.envoy.timeouts.perTry }}
+                                  retry_back_off:
+                                    base_interval: {{ .Values.envoy.retry.baseInterval }}
+                                    max_interval: {{ .Values.envoy.retry.maxInterval }}
+                            # This route is used by API pods only. NetworkPolicies
+                            # prevent it from being a normal external entry point.
+                            - match:
+                                prefix: "/payments"
+                              route:
+                                cluster: payments_service
+                                timeout: {{ .Values.envoy.timeouts.request }}
+                                regex_rewrite:
+                                  pattern:
+                                    regex: "^/payments"
+                                  substitution: ""
+                                retry_policy:
+                                  retry_on: "5xx,reset,connect-failure,refused-stream"
+                                  num_retries: {{ .Values.envoy.retry.attempts }}
+                                  per_try_timeout: {{ .Values.envoy.timeouts.perTry }}
+                                  retry_back_off:
+                                    base_interval: {{ .Values.envoy.retry.baseInterval }}
+                                    max_interval: {{ .Values.envoy.retry.maxInterval }}
+                            - match:
+                                prefix: "/healthz"
+                              route:
+                                cluster: api_service
+                                timeout: 1s
+                            - match:
+                                prefix: "/readyz"
+                              route:
+                                cluster: api_service
+                                timeout: 1s
+                    http_filters:
+                      - name: envoy.filters.http.router
+                        typed_config:
+                          "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+      clusters:
+        - name: api_service
+          type: STRICT_DNS
+          connect_timeout: {{ .Values.envoy.timeouts.connect }}
+          lb_policy: ROUND_ROBIN
+          circuit_breakers:
+            thresholds:
+              - priority: DEFAULT
+                max_connections: {{ .Values.envoy.circuitBreaker.maxConnections }}
+                max_pending_requests: {{ .Values.envoy.circuitBreaker.maxPendingRequests }}
+                max_requests: {{ .Values.envoy.circuitBreaker.maxRequests }}
+                max_retries: {{ .Values.envoy.circuitBreaker.maxRetries }}
+          load_assignment:
+            cluster_name: api_service
+            endpoints:
+              - lb_endpoints:
+                  - endpoint:
+                      address:
+                        socket_address:
+                          address: {{ printf "%s-api.%s.svc.cluster.local" .Release.Name .Release.Namespace }}
+                          port_value: 8000
+          health_checks:
+            - timeout: 1s
+              interval: 5s
+              unhealthy_threshold: 2
+              healthy_threshold: 2
+              http_health_check:
+                path: "/readyz"
+          outlier_detection:
+            consecutive_5xx: {{ .Values.envoy.outlierDetection.consecutive5xx }}
+            interval: {{ .Values.envoy.outlierDetection.interval }}
+            base_ejection_time: {{ .Values.envoy.outlierDetection.baseEjectionTime }}
+            max_ejection_percent: {{ .Values.envoy.outlierDetection.maxEjectionPercent }}
+            enforcing_consecutive_5xx: 100
+          typed_extension_protocol_options:
+            envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+              "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+              explicit_http_config:
+                http_protocol_options: {}
+        - name: payments_service
+          type: STRICT_DNS
+          connect_timeout: {{ .Values.envoy.timeouts.connect }}
+          lb_policy: ROUND_ROBIN
+          circuit_breakers:
+            thresholds:
+              - priority: DEFAULT
+                max_connections: {{ .Values.envoy.circuitBreaker.maxConnections }}
+                max_pending_requests: {{ .Values.envoy.circuitBreaker.maxPendingRequests }}
+                max_requests: {{ .Values.envoy.circuitBreaker.maxRequests }}
+                max_retries: {{ .Values.envoy.circuitBreaker.maxRetries }}
+          load_assignment:
+            cluster_name: payments_service
+            endpoints:
+              - lb_endpoints:
+                  - endpoint:
+                      address:
+                        socket_address:
+                          address: {{ printf "%s-payments.%s.svc.cluster.local" .Release.Name .Release.Namespace }}
+                          port_value: 8001
+          health_checks:
+            - timeout: 1s
+              interval: 5s
+              unhealthy_threshold: 2
+              healthy_threshold: 2
+              http_health_check:
+                path: "/readyz"
+          outlier_detection:
+            consecutive_5xx: {{ .Values.envoy.outlierDetection.consecutive5xx }}
+            interval: {{ .Values.envoy.outlierDetection.interval }}
+            base_ejection_time: {{ .Values.envoy.outlierDetection.baseEjectionTime }}
+            max_ejection_percent: {{ .Values.envoy.outlierDetection.maxEjectionPercent }}
+            enforcing_consecutive_5xx: 100
+          typed_extension_protocol_options:
+            envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+              "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+              explicit_http_config:
+                http_protocol_options: {}
+{{- end }}

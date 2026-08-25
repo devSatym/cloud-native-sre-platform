@@ -1,4 +1,10 @@
-# Resilience Patterns
+> **Historical local-lab reference — superseded.** This guide refers to the
+> retired standalone Envoy and Traefik manifests. Use the root
+> [Reliability Patterns](../README.md#reliability-patterns), current Helm Envoy
+> templates, and the evidence ledger for the GKE design. It is not current
+> validation evidence.
+
+# Resilience Patterns (historical v0.1.0)
 
 *Reference guide for the resilience patterns implemented in Resilience Lab.*
 

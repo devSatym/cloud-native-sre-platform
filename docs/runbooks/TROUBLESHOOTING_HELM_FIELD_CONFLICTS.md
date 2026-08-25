@@ -1,3 +1,7 @@
+> **Historical local-lab record — superseded.** The examples below use a prior
+> release/namespace. Apply the underlying field-ownership principle only after
+> substituting the current Helm-managed resource names.
+
 # Runbook: Helm SSA Field Manager Conflicts
 
 **Status:** Active

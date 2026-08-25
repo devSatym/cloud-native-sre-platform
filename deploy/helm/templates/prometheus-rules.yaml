@@ -1,0 +1,118 @@
+{{- if and .Values.monitoring.enabled .Values.monitoring.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ .Release.Name }}-sre-rules
+  namespace: {{ .Values.monitoring.namespace }}
+  labels:
+    release: {{ .Values.monitoring.releaseLabel | quote }}
+    app.kubernetes.io/part-of: cloud-native-sre-platform
+spec:
+  groups:
+    - name: cloud_native_sre_platform.sli
+      interval: 30s
+      rules:
+        - record: sre:api_requests:rate5m
+          expr: |
+            sum by (namespace) (
+              rate(sre_api_user_requests_total{namespace="{{ .Release.Namespace }}"}[5m])
+            )
+        - record: sre:api_server_errors:rate5m
+          expr: |
+            sum by (namespace) (
+              rate(sre_api_user_requests_total{namespace="{{ .Release.Namespace }}",status_class="5xx"}[5m])
+            )
+        - record: sre:api_availability:ratio_rate5m
+          expr: |
+            sum by (namespace) (rate(sre_api_user_requests_total{namespace="{{ .Release.Namespace }}",status_class!~"5xx"}[5m]))
+            /
+            sum by (namespace) (rate(sre_api_user_requests_total{namespace="{{ .Release.Namespace }}"}[5m]))
+        - record: sre:api_availability:ratio_30d
+          expr: |
+            sum by (namespace) (rate(sre_api_user_requests_total{namespace="{{ .Release.Namespace }}",status_class!~"5xx"}[30d]))
+            /
+            sum by (namespace) (rate(sre_api_user_requests_total{namespace="{{ .Release.Namespace }}"}[30d]))
+        - record: sre:api_latency:ratio_30d
+          expr: |
+            sum by (namespace) (rate(sre_api_user_request_duration_seconds_bucket{namespace="{{ .Release.Namespace }}",le="0.5"}[30d]))
+            /
+            sum by (namespace) (rate(sre_api_user_request_duration_seconds_count{namespace="{{ .Release.Namespace }}"}[30d]))
+        - record: sre:api_error_budget_remaining:ratio
+          expr: clamp_min((sre:api_availability:ratio_30d - 0.995) / 0.005, 0)
+        - record: sre:api_error_budget_consumed:ratio
+          # This may exceed 1 when the SLO is missed; do not hide an exhausted
+          # budget by capping the consumed value at 100%.
+          expr: (1 - sre:api_availability:ratio_30d) / 0.005
+        - record: sre:api_error_budget_burn_rate:5m
+          expr: |
+            (sre:api_server_errors:rate5m / clamp_min(sre:api_requests:rate5m, 0.001))
+            / 0.005
+        - record: sre:api_error_budget_burn_rate:1h
+          expr: |
+            (
+              sum by (namespace) (rate(sre_api_user_requests_total{namespace="{{ .Release.Namespace }}",status_class="5xx"}[1h]))
+              / clamp_min(sum by (namespace) (rate(sre_api_user_requests_total{namespace="{{ .Release.Namespace }}"}[1h])), 0.001)
+            ) / 0.005
+    - name: cloud_native_sre_platform.alerts
+      interval: 30s
+      rules:
+        - alert: HighErrorRate
+          expr: |
+            (sre:api_server_errors:rate5m / clamp_min(sre:api_requests:rate5m, 0.001)) > 0.05
+            and sre:api_requests:rate5m > 0.1
+          for: 5m
+          labels:
+            severity: warning
+            service: api
+          annotations:
+            summary: High user-facing API error rate
+            description: More than 5% of /pay requests have returned server errors for five minutes.
+        - alert: HighLatency
+          expr: |
+            histogram_quantile(0.95, sum by (namespace, le) (rate(sre_api_user_request_duration_seconds_bucket{namespace="{{ .Release.Namespace }}"}[5m]))) > 0.5
+            and sre:api_requests:rate5m > 0.1
+          for: 10m
+          labels:
+            severity: warning
+            service: api
+          annotations:
+            summary: High user-facing API latency
+            description: The p95 /pay latency has exceeded 500 ms for ten minutes.
+        - alert: SLOBudgetFastBurn
+          expr: sre:api_error_budget_burn_rate:5m > 14.4 and sre:api_requests:rate5m > 0.1
+          for: 5m
+          labels:
+            severity: critical
+            service: api
+          annotations:
+            summary: Fast availability error-budget burn
+            description: The availability SLO budget is burning more than 14.4 times its sustainable rate.
+        - alert: SLOBudgetSlowBurn
+          expr: |
+            sre:api_error_budget_burn_rate:1h > 3
+            and sum by (namespace) (rate(sre_api_user_requests_total{namespace="{{ .Release.Namespace }}"}[1h])) > 0.1
+          for: 30m
+          labels:
+            severity: warning
+            service: api
+          annotations:
+            summary: Slow availability error-budget burn
+            description: The availability SLO budget is burning more than three times its sustainable rate.
+        - alert: ServiceDown
+          expr: |
+            kube_deployment_status_replicas_available{
+              namespace="{{ .Release.Namespace }}",
+              deployment="{{ .Release.Name }}-api"
+            } < 1
+            or absent(kube_deployment_status_replicas_available{
+              namespace="{{ .Release.Namespace }}",
+              deployment="{{ .Release.Name }}-api"
+            })
+          for: 2m
+          labels:
+            severity: critical
+            service: api
+          annotations:
+            summary: API deployment unavailable
+            description: No API replicas are available in the {{ .Release.Namespace }} namespace.
+{{- end }}

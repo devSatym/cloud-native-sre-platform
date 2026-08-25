@@ -1,4 +1,10 @@
-# Architecture
+> **Historical local-lab record — superseded.** This v0.1.0 architecture uses a
+> retired Traefik/standalone-Envoy path and makes historical deployment claims.
+> Use the root [architecture overview](../README.md#architecture) and
+> [`implementation-plan.md`](implementation-plan.md) for the configured GKE target.
+> This file is retained only as history, not current evidence.
+
+# Architecture (historical v0.1.0)
 
 **Resilience Lab — v0.1.0**
 

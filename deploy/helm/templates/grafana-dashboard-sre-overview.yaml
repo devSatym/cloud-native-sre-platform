@@ -1,0 +1,13 @@
+{{- if .Values.dashboards.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-grafana-sre-overview
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cloud-native-sre-platform.labels" . | nindent 4 }}
+    grafana_dashboard: "1"
+data:
+  sre-service-overview.json: |-
+{{ .Files.Get "dashboards/sre-service-overview.json" | nindent 4 }}
+{{- end }}

@@ -1,7 +1,8 @@
 """Tests for rate limit middleware."""
 
 import pytest
-from unittest.mock import Mock, AsyncMock
+from redis.exceptions import RedisError
+from unittest.mock import AsyncMock, Mock
 from fastapi import Request, status
 
 from ..middleware.rate_limit import RateLimitMiddleware
@@ -112,3 +113,17 @@ async def test_rate_limit_separate_tenants(rate_limiter, mock_redis):
 
     response_b = await rate_limiter.dispatch(request_b, call_next)
     assert response_b.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_fails_closed_when_redis_is_unavailable(rate_limiter, mock_redis):
+    mock_redis.pipeline.return_value.execute.side_effect = RedisError("unavailable")
+
+    request = Mock(spec=Request)
+    request.url.path = "/pay"
+    request.headers = {"X-Tenant": "test-tenant"}
+
+    response = await rate_limiter.dispatch(request, AsyncMock())
+
+    assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+    assert b"rate_limit_backend_unavailable" in response.body

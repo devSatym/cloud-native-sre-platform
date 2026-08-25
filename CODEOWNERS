@@ -1,2 +1,2 @@
-# Default owner for everything in the repo
-* @lotoos0
+# Assign a repository-specific owner in GitHub before enforcing CODEOWNERS.
+# No personal handle is committed so this project remains portable.

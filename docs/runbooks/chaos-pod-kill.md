@@ -1,3 +1,7 @@
+> **Historical local-lab record — do not use as a PDB test.** This document uses
+> direct pod deletion, which bypasses voluntary-disruption protection. Use
+> [`pdb-eviction-test.md`](pdb-eviction-test.md) for the current PDB procedure.
+
 # Chaos Test: Pod Kill / Partial Outage
 
 **Issue:** [#41 — Run chaos test: pod kill / partial outage](https://github.com/lotoos0/resilience-lab/issues/41)

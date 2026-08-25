@@ -1,69 +1,223 @@
-# Global configuration
-global:
-  imageRegistry: ghcr.io
-  imageRepository: lotoos0/resilience-lab
-  imagePullPolicy: IfNotPresent
-  storageClass: standard
-# PostgreSQL configuration
-postgresql:
-  enabled: true
-  auth:
-    username: resilience
-    password: resilience
-    database: resilience_db
-  primary:
-    persistence:
-      enabled: true
-      size: 1Gi
-# Redis configuration
-# Plain Deployment+Service (deploy/helm/templates/redis-*.yaml), not a Bitnami
-# subchart: the rate-limit middleware only needs an atomic shared store for
-# sliding-window counters (ephemeral by nature, TTL = 60s), so an emptyDir is
-# enough — no persistence/auth/replication required.
-redis:
-  enabled: true
-  image:
-    repository: redis
-    tag: 7-alpine
-    pullPolicy: IfNotPresent
-  resources:
-    limits:
-      cpu: 250m
-      memory: 256Mi
-    requests:
-      cpu: 50m
-      memory: 64Mi
-# API service configuration
+# Defaults are intentionally deploy-safe only after immutable application image
+# coordinates are supplied. CI/deploy workflows set both repository and SHA tag.
+nameOverride: ""
+fullnameOverride: ""
+
 api:
-  enabled: true
-  replicaCount: 2
+  replicaCount: 1
   image:
-    repository: ghcr.io/lotoos0/resilience-lab-api
-    tag: latest
+    repository: REPLACE_WITH_ARTIFACT_REGISTRY/api
+    tag: REPLACE_WITH_GIT_SHA
     pullPolicy: IfNotPresent
+  imagePullSecrets: []
   service:
     type: ClusterIP
     port: 8000
-  env:
-    - name: DATABASE_URL
-      value: "postgresql://resilience:resilience@postgresql:5432/resilience_db"
-    - name: REDIS_URL
-      value: "redis://redis:6379"
-    - name: PAYMENTS_URL
-      value: "http://resilience-lab-payments:8001"
-# Payments service configuration
+  # Empty values select release-safe in-cluster defaults:
+  # http://<release>-envoy.<namespace>.svc.cluster.local/payments
+  # redis://<release>-redis.<namespace>.svc.cluster.local:6379/0
+  paymentsUrl: ""
+  redisUrl: ""
+  env: []
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  startupProbe:
+    httpGet:
+      path: /healthz
+      port: http
+    failureThreshold: 30
+    periodSeconds: 5
+  livenessProbe:
+    httpGet:
+      path: /healthz
+      port: http
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  readinessProbe:
+    httpGet:
+      path: /readyz
+      port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+  hpa:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 3
+    targetCPUUtilizationPercentage: 65
+    scaleDownStabilizationWindowSeconds: 300
+  pdb:
+    enabled: true
+    minAvailable: 1
+
 payments:
-  enabled: true
   replicaCount: 2
   image:
-    repository: ghcr.io/lotoos0/resilience-lab-payments
-    tag: latest
+    repository: REPLACE_WITH_ARTIFACT_REGISTRY/payments
+    tag: REPLACE_WITH_GIT_SHA
     pullPolicy: IfNotPresent
+  imagePullSecrets: []
+  env: []
   service:
     type: ClusterIP
     port: 8001
-  env:
-    - name: DATABASE_URL
-      value: "postgresql://resilience:resilience@postgresql:5432/resilience_db"
-    - name: REDIS_URL
-      value: "redis://redis:6379"
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  startupProbe:
+    httpGet:
+      path: /healthz
+      port: http
+    failureThreshold: 30
+    periodSeconds: 5
+  livenessProbe:
+    httpGet:
+      path: /healthz
+      port: http
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  readinessProbe:
+    httpGet:
+      path: /readyz
+      port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+  hpa:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 3
+    targetCPUUtilizationPercentage: 70
+  pdb:
+    enabled: true
+    minAvailable: 1
+  chaosMode:
+    netAdmin: false
+    runAsRoot: false
+
+redis:
+  # Redis is required for the API's fail-closed, tenant rate limiter. The
+  # chart intentionally deploys it rather than advertising a broken toggle.
+  image:
+    repository: redis
+    tag: 7.4.2-alpine
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
+envoy:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: envoyproxy/envoy
+    tag: v1.28.0
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 80
+    adminPort: 9901
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  timeouts:
+    request: 2s
+    # Envoy v1.28 protobuf durations use decimal seconds, not an ms suffix.
+    perTry: 0.2s
+    connect: 0.5s
+  retry:
+    attempts: 2
+    baseInterval: 0.025s
+    maxInterval: 0.25s
+  circuitBreaker:
+    maxConnections: 5
+    maxPendingRequests: 5
+    maxRequests: 10
+    maxRetries: 3
+  outlierDetection:
+    consecutive5xx: 3
+    interval: 10s
+    baseEjectionTime: 30s
+    maxEjectionPercent: 50
+
+ingress:
+  enabled: true
+  className: ""
+  annotations: {}
+  host: ""
+  tls: []
+
+monitoring:
+  enabled: false
+  namespace: monitoring
+  # Must match the Helm release installed by deploy-observability.sh so the
+  # kube-prometheus-stack selectors discover these ServiceMonitors and rules.
+  releaseLabel: kube-prometheus-stack
+  scrapeInterval: 30s
+  prometheusRule:
+    enabled: false
+
+dashboards:
+  enabled: true
+
+networkPolicy:
+  enabled: true
+  dnsNamespace: kube-system
+  monitoringNamespace: monitoring
+  ingressControllerNamespace: kube-system
+  # GKE external HTTP(S) load-balancer health-check/proxy ranges. Override for
+  # another ingress implementation rather than broadening all ingress.
+  envoyIngressCIDRs:
+    - 35.191.0.0/16
+    - 130.211.0.0/22
+
+resourceQuota:
+  enabled: true
+  hard:
+    requests.cpu: "2"
+    limits.cpu: "4"
+    requests.memory: 2Gi
+    limits.memory: 4Gi
+    pods: "20"
+    services: "10"
+    configmaps: "30"
+    secrets: "20"
+    persistentvolumeclaims: "5"
+
+limitRange:
+  enabled: true
+  default:
+    cpu: 500m
+    memory: 512Mi
+  defaultRequest:
+    cpu: 100m
+    memory: 128Mi
+  max:
+    cpu: "1"
+    memory: 1Gi
+  min:
+    cpu: 10m
+    memory: 16Mi

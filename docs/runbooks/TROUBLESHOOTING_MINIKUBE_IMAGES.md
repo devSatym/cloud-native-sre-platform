@@ -1,3 +1,6 @@
+> **Historical local-lab record.** This Minikube-specific guide is retained for
+> local context and is not part of the current GKE deployment path.
+
 # Runbook: Minikube — ImagePullBackOff for Local Images
 
 **Status:** Active

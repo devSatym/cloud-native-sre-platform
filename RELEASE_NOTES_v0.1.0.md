@@ -1,3 +1,7 @@
+> **Historical release record.** This document preserves the prior local-lab
+> release, including old repository and image examples. It does not describe the
+> current GKE target and must not be used as deployment or validation evidence.
+
 # v0.1.0 — Resilience Lab MVP
 
 ## Overview

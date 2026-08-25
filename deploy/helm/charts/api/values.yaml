@@ -1,48 +1,41 @@
-replicaCount: 2
+replicaCount: 1
 image:
-  repository: ghcr.io/lotoos0/resilience-lab-api
-  tag: metrics-bypass
+  repository: REPLACE_WITH_ARTIFACT_REGISTRY/api
+  tag: REPLACE_WITH_GIT_SHA
   pullPolicy: IfNotPresent
+imagePullSecrets: []
 service:
   type: ClusterIP
   port: 8000
-env:
-  - name: DATABASE_URL
-    value: ""
-  - name: REDIS_HOST
-    value: "redis"
-  - name: REDIS_PORT
-    value: "6379"
-  - name: REDIS_URL
-    value: ""
-  - name: PAYMENTS_URL
-    value: ""
+paymentsUrl: ""
+redisUrl: ""
+env: []
 resources:
-  limits:
-    cpu: 500m
-    memory: 512Mi
   requests:
     cpu: 100m
     memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
 startupProbe:
   httpGet:
     path: /healthz
-    port: 8000
+    port: http
   failureThreshold: 30
-  periodSeconds: 10
+  periodSeconds: 5
 livenessProbe:
   httpGet:
     path: /healthz
-    port: 8000
+    port: http
   initialDelaySeconds: 10
   periodSeconds: 10
-  timeoutSeconds: 5
+  timeoutSeconds: 3
   failureThreshold: 3
 readinessProbe:
   httpGet:
-    path: /healthz
-    port: 8000
+    path: /readyz
+    port: http
   initialDelaySeconds: 5
   periodSeconds: 5
   timeoutSeconds: 3
-  successThreshold: 1
+  failureThreshold: 3

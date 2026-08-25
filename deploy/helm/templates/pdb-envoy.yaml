@@ -1,10 +1,16 @@
+{{- if .Values.envoy.enabled }}
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: resilience-lab-envoy-pdb
-  namespace: resilience-lab
+  name: {{ .Release.Name }}-envoy-pdb
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cloud-native-sre-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/name: envoy
 spec:
   minAvailable: 1
   selector:
     matchLabels:
-      app: envoy-proxy
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/name: envoy
+{{- end }}

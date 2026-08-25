@@ -1,0 +1,143 @@
+name: Deploy to GKE
+
+on:
+  workflow_run:
+    workflows:
+      - Build images
+    branches:
+      - main
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Full 40-character Git commit SHA already published to Artifact Registry
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-gke-dev
+  cancel-in-progress: false
+
+env:
+  GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  GCP_REGION: ${{ vars.GCP_REGION }}
+  ARTIFACT_REGISTRY_REPOSITORY: ${{ vars.ARTIFACT_REGISTRY_REPOSITORY }}
+  GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+  GCP_DEPLOYER_SERVICE_ACCOUNT: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT }}
+  GKE_CLUSTER_NAME: ${{ vars.GKE_CLUSTER_NAME }}
+  GKE_CLUSTER_LOCATION: ${{ vars.GKE_CLUSTER_LOCATION }}
+  HELM_RELEASE_NAME: ${{ vars.HELM_RELEASE_NAME }}
+  KUBERNETES_NAMESPACE: ${{ vars.KUBERNETES_NAMESPACE }}
+  MONITORING_NAMESPACE: ${{ vars.MONITORING_NAMESPACE || 'monitoring' }}
+  PROMETHEUS_RELEASE: ${{ vars.PROMETHEUS_RELEASE || 'kube-prometheus-stack' }}
+
+jobs:
+  deploy:
+    name: Helm deploy
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    environment:
+      name: gke-dev
+    steps:
+      - name: Select the immutable image tag
+        id: image
+        env:
+          REQUESTED_TAG: ${{ inputs.image_tag }}
+          WORKFLOW_RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            image_tag="${REQUESTED_TAG}"
+          else
+            image_tag="${WORKFLOW_RUN_SHA}"
+          fi
+
+          if [[ ! "${image_tag}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "image_tag must be a full 40-character lowercase Git SHA" >&2
+            exit 1
+          fi
+
+          echo "value=${image_tag}" >> "${GITHUB_OUTPUT}"
+
+      - name: Check out the deployment revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.image.outputs.value }}
+
+      - name: Verify required deployment configuration
+        run: |
+          required=(
+            GCP_PROJECT_ID
+            GCP_REGION
+            ARTIFACT_REGISTRY_REPOSITORY
+            GCP_WORKLOAD_IDENTITY_PROVIDER
+            GCP_DEPLOYER_SERVICE_ACCOUNT
+            GKE_CLUSTER_NAME
+            GKE_CLUSTER_LOCATION
+            HELM_RELEASE_NAME
+            KUBERNETES_NAMESPACE
+          )
+          missing=()
+          for variable in "${required[@]}"; do
+            if [[ -z "${!variable:-}" ]]; then
+              missing+=("${variable}")
+            fi
+          done
+          if (( ${#missing[@]} )); then
+            printf 'Missing required GitHub Actions variables: %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+
+      - name: Authenticate to Google Cloud with GitHub OIDC
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SERVICE_ACCOUNT }}
+
+      - name: Get GKE credentials
+        uses: google-github-actions/get-gke-credentials@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          cluster_name: ${{ vars.GKE_CLUSTER_NAME }}
+          location: ${{ vars.GKE_CLUSTER_LOCATION }}
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.15.4
+
+      - name: Verify observability CRDs are installed
+        run: |
+          kubectl get crd servicemonitors.monitoring.coreos.com
+          kubectl get crd prometheusrules.monitoring.coreos.com
+
+      - name: Build local chart dependencies
+        run: helm dependency build deploy/helm
+
+      - name: Deploy immutable images with Helm
+        env:
+          IMAGE_TAG: ${{ steps.image.outputs.value }}
+          IMAGE_REGISTRY: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.ARTIFACT_REGISTRY_REPOSITORY }}
+        run: |
+          helm upgrade --install "${HELM_RELEASE_NAME}" deploy/helm \
+            --namespace "${KUBERNETES_NAMESPACE}" \
+            --create-namespace \
+            --set-string "api.image.repository=${IMAGE_REGISTRY}/api" \
+            --set-string "api.image.tag=${IMAGE_TAG}" \
+            --set-string "payments.image.repository=${IMAGE_REGISTRY}/payments" \
+            --set-string "payments.image.tag=${IMAGE_TAG}" \
+            --set monitoring.enabled=true \
+            --set monitoring.prometheusRule.enabled=true \
+            --set-string "monitoring.namespace=${MONITORING_NAMESPACE}" \
+            --set-string "monitoring.releaseLabel=${PROMETHEUS_RELEASE}" \
+            --set-string "networkPolicy.monitoringNamespace=${MONITORING_NAMESPACE}" \
+            --wait \
+            --timeout 10m \
+            --atomic

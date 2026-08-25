@@ -1,3 +1,9 @@
+> **Historical local-lab troubleshooting record — superseded.** The scripts and
+> endpoint assumptions below predate the canonical focused k6 tests. Use
+> [`../../tests/load/rate-limit.js`](../../tests/load/rate-limit.js) and the
+> evidence ledger for current rate-limit validation; this file is not current
+> evidence.
+
 # Load test passes 100% green while testing nothing
 
 **Discovered:** 2026-06-08

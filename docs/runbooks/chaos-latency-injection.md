@@ -1,3 +1,8 @@
+> **Historical local-lab record — superseded.** This document contains fixed
+> namespace, image, and metric examples. Use `scripts/fault-inject.sh`, the
+> current [payment-error runbook](high-payment-error-rate.md), and the evidence
+> ledger for new GKE experiments.
+
 # Runbook: Chaos Test — Latency Injection (300ms, Payments)
 
 **Status:** Active

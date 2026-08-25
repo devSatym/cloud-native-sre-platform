@@ -1,6 +1,6 @@
 """
 Sanity tests to ensure CI pipeline is working.
-These will be expanded in M0 with actual service tests.
+Service-specific tests live beside the API and Payments services.
 """
 
 
@@ -16,6 +16,8 @@ def test_imports():
     # Try to import optional dependencies - skip if not installed locally
     pytest.importorskip("fastapi", reason="fastapi not installed - run: make install")
     pytest.importorskip("redis", reason="redis not installed - run: make install")
-    pytest.importorskip("psycopg2", reason="psycopg2 not installed - run: make install")
+    pytest.importorskip(
+        "prometheus_fastapi_instrumentator", reason="instrumentator not installed - run: make install"
+    )
 
     assert pytest is not None

@@ -1,0 +1,12 @@
+# Remote state is opt-in. Create a dedicated, versioned GCS bucket out of band,
+# copy this file to backend.tf, replace the placeholder, then run:
+# terraform init -reconfigure
+#
+# Do not put credentials in this file. Terraform uses Application Default
+# Credentials locally and keyless Workload Identity Federation in GitHub Actions.
+terraform {
+  backend "gcs" {
+    bucket = "REPLACE_WITH_EXISTING_STATE_BUCKET"
+    prefix = "cloud-native-sre-platform/dev"
+  }
+}

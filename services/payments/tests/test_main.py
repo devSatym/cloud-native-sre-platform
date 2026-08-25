@@ -16,10 +16,17 @@ def test_healthz():
 
 
 @pytest.mark.unit
+def test_readyz():
+    response = client.get("/readyz")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ready", "service": "payments"}
+
+
+@pytest.mark.unit
 def test_root():
     response = client.get("/")
     assert response.status_code == 200
-    assert response.json()["service"] == "resilience-lab-payments"
+    assert response.json()["service"] == "cloud-native-sre-platform-payments"
 
 
 @pytest.mark.unit
